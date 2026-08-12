@@ -499,6 +499,7 @@ class App(ctk.CTk):
             self.preset_name.insert(0, stem)   # 无预设 → 输入框显示模型名
             self.param_src_lab.configure(text='')
             self.apply_computed_defaults(m)
+        self.update_preset_controls()   # 刷新删预设按钮状态/颜色（自动应用预设后要变鲜艳）
 
     def is_gemma(self, model):
         flags = self.cfg.get('gemma', {})
