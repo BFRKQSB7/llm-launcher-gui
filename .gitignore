@@ -1,0 +1,17 @@
+# 构建产物
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+
+# 本机个性化 / 自动生成文件（不发布）
+llm_presets.json
+llm_default_presets.json
+llm_gui_config.json
+llm_gui_err.log
+
+# llama.cpp 运行时（用户自行放置）
+*.exe
+*.dll
+models/
