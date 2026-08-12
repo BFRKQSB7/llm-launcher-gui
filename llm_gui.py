@@ -228,6 +228,8 @@ class App(ctk.CTk):
                                          command=lambda _: self.on_category_change())
         self.cat_sel.grid(row=0, column=3, padx=6, pady=6, sticky='w')
         ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults()).grid(row=0, column=4, padx=(10, 12), pady=6)
+        self.param_src_lab = ctk.CTkLabel(self.top_frame, text='', text_color='#8ab4f8', font=('Microsoft YaHei', 11))
+        self.param_src_lab.grid(row=0, column=5, padx=(0, 12), pady=6, sticky='w')
         # 第二行：预设
         ctk.CTkLabel(self.top_frame, text='预设').grid(row=1, column=0, padx=(12, 6), pady=6)
         self.preset_sel = ctk.CTkOptionMenu(self.top_frame, values=['（无预设）'], command=lambda _: self.on_preset_load(), width=160)
@@ -351,6 +353,39 @@ class App(ctk.CTk):
         self.log_box = ctk.CTkTextbox(f2, state='disabled', wrap='none', font=('Consolas', 12))
         self.log_box.pack(fill='both', expand=True)
         self.pw.add(f2, weight=1)
+        self._bind_param_edit_marker()
+
+    def _bind_param_edit_marker(self):
+        def mark(_=None):
+            self.param_src_lab.configure(text='✏ 手动调整', text_color='#e8b04a')
+
+        def wrap(menu):
+            try:
+                orig = menu.cget('command')
+            except Exception:
+                orig = None
+
+            def handler(val):
+                try:
+                    if orig:
+                        orig(val)
+                except Exception:
+                    pass
+                mark()
+            menu.configure(command=handler)
+
+        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel,
+                  self.w_n_batch, self.w_server_path]:
+            if isinstance(w, ctk.CTkEntry):
+                w.bind('<KeyRelease>', mark)
+            elif isinstance(w, ctk.CTkOptionMenu):
+                wrap(w)
+        for pp in PARAMS:
+            w = getattr(self, 'w_' + pp['k'], None)
+            if isinstance(w, ctk.CTkEntry):
+                w.bind('<KeyRelease>', mark)
+            elif isinstance(w, ctk.CTkOptionMenu):
+                wrap(w)
 
     # ---------- 数据 ----------
     def models_list(self):
@@ -374,6 +409,7 @@ class App(ctk.CTk):
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
+        self.param_src_lab.configure(text='')
         self.apply_computed_defaults(m)
 
     def is_gemma(self, model):
@@ -441,6 +477,7 @@ class App(ctk.CTk):
                     self._save_computed_defaults(model, params)
                     if self.current_model == model and not self._preset_locked:
                         self.set_params(params)
+                        self.param_src_lab.configure(text=f'⚡ 自动计算（{vram}G 显存 + 模型大小）', text_color='#8ab4f8')
                         self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）')
                 elif kind == 'gpus':
                     _, gpus = item
@@ -529,6 +566,7 @@ class App(ctk.CTk):
         n = self.preset_sel.get()
         if n and n != '（无预设）' and self.current_model and n in self.presets.get(self.current_model, {}):
             self.set_params(self.presets[self.current_model][n])
+            self.param_src_lab.configure(text=f'📌 预设：{n}', text_color='#e8c468')
             self._preset_locked = True   # 加载预设后，挂起的自动计算不覆盖用户预设参数
         self.update_preset_controls()
 
