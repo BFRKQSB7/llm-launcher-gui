@@ -35,7 +35,7 @@ PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
-VERSION = '1.0.2'
+VERSION = '1.0.3'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -196,7 +196,10 @@ class App(ctk.CTk):
         ws = self.cfg.get('window_size')
         if self.cfg.get('remember_size', True) and isinstance(ws, list) and len(ws) == 2:
             try:
-                self.geometry(f'{int(ws[0])}x{int(ws[1])}')
+                w, h = int(ws[0]), int(ws[1])
+                w = max(780, min(w, self.winfo_screenwidth() - 40))
+                h = max(580, min(h, self.winfo_screenheight() - 80))
+                self.geometry(f'{w}x{h}')
             except (TypeError, ValueError):
                 pass
         self._build_ui()
@@ -915,7 +918,9 @@ class App(ctk.CTk):
                 self.proc.kill()
         if self.cfg.get('remember_size', True):
             try:
-                self.cfg['window_size'] = [self.winfo_width(), self.winfo_height()]
+                wxh = self.geometry().split('+')[0]   # 逻辑尺寸（反向缩放），避免 winfo×缩放复合放大
+                w, h = wxh.split('x')
+                self.cfg['window_size'] = [int(w), int(h)]
                 save_cfg(self.cfg)
             except Exception:
                 pass
