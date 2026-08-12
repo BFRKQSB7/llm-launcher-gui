@@ -46,7 +46,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.1.3'
+VERSION = '1.1.4'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -468,8 +468,10 @@ class App(ctk.CTk):
     def load_models(self):
         ms = self.models_list()
         self.model_sel.configure(values=ms if ms else ['（models 目录为空）'])
-        self.model_sel.set(ms[0] if ms else '（models 目录为空）')
-        self.current_model = ms[0] if ms else None
+        last = self.cfg.get('last_model')
+        m = last if (last and last in ms) else (ms[0] if ms else None)
+        self.model_sel.set(m if m else '（models 目录为空）')
+        self.current_model = m
 
     def on_model_change(self):
         m = self.model_sel.get()
@@ -1287,6 +1289,9 @@ class App(ctk.CTk):
                 save_cfg(self.cfg)
             except Exception:
                 pass
+        if self.current_model:   # 记住上次选的模型，下次启动恢复
+            self.cfg['last_model'] = self.current_model
+            save_cfg(self.cfg)
         self.destroy()
 
 
