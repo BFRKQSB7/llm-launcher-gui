@@ -35,7 +35,7 @@ PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
