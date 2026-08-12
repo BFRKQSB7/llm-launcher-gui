@@ -17,7 +17,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 ## 界面预览
 
-![LLM GUI 界面](screenshot.png)
+![LLM GUI 界面](screenshot.jpg)
 
 ## 快速开始
 

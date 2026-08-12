@@ -17,7 +17,7 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 
 ## Screenshot
 
-![LLM GUI](../../screenshot.png)
+![LLM GUI](../../screenshot.jpg)
 
 ## Quick Start
 
