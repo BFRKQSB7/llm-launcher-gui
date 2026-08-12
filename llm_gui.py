@@ -13,7 +13,8 @@
 """
 import json, os, queue, socket, subprocess, sys, threading, traceback, webbrowser
 import tkinter as tk
-from tkinter import ttk, messagebox
+import tkinter.font as tkfont
+from tkinter import ttk, messagebox, filedialog
 import customtkinter as ctk
 
 APP_ICON_B64 = "AAABAAMAEBAAAAEAIAAoBAAANgAAACAgAAABACAAKBAAAF4EAAAwMAAAAQAgACgkAACGFAAAKAAAABAAAAAgAAAAAQAgAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAoAAAAIAAAAEAAAAABACAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAAAAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAAAAAAAAAAAAAAAAAACgAAAAwAAAAYAAAAAEAIAAAAAAAACQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAAAAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP9PjP//T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/T4z//0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/0+M//8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAJCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8AAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAAAAAAAAkJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/yQkJP8kJCT/JCQk/wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -35,7 +36,17 @@ PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
-VERSION = '1.0.3'
+DEFAULT_SASH_POS = 537   # 参数区/日志区默认分割位置（用户当前窗口状态）
+
+GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if message['role'] == 'user' %}<start_of_turn>user
+{{ message['content'] }}<end_of_turn>
+{% elif message['role'] == 'assistant' %}<start_of_turn>model
+{{ message['content'] }}<end_of_turn>
+{% endif %}{% endfor %}{% if add_generation_prompt %}<start_of_turn>model
+{% endif %}
+"""
+
+VERSION = '1.1.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -205,11 +216,28 @@ class App(ctk.CTk):
         self._build_ui()
         self.load_models()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
+        sp = self.cfg.get('sash_pos')
+        if self.cfg.get('remember_size', True) and isinstance(sp, int):
+            self.after(100, lambda: self._restore_sash(sp))
+        else:
+            self.after(100, self._restore_default_sash)
         self.after(100, self.on_model_change)
         self.after(200, self._startup_hardware)
         self._q = queue.Queue()
         self._preset_locked = False
         self.after(150, self._poll_q)
+
+    def _restore_sash(self, pos):
+        try:
+            self.pw.sashpos(0, pos)
+        except Exception:
+            pass
+
+    def _restore_default_sash(self):
+        try:
+            self.pw.sashpos(0, DEFAULT_SASH_POS)
+        except Exception:
+            pass
 
     def _set_window_icon(self):
         try:
@@ -344,22 +372,26 @@ class App(ctk.CTk):
 
         self.bar = ctk.CTkFrame(self)
         self.bar.grid(row=2, column=0, sticky='ew', padx=12, pady=6)
-        self.bar.grid_columnconfigure(1, weight=1)
+        self.bar.grid_columnconfigure(3, weight=1)
         ctk.CTkButton(self.bar, text='▶ 启动', fg_color='#2f7a50', hover_color='#358a5c', width=110, command=self.start).grid(row=0, column=0, padx=12, pady=10)
-        ctk.CTkButton(self.bar, text='■ 停止', fg_color='#8a3f3f', hover_color='#9a4848', width=110, command=self.stop).grid(row=0, column=1, padx=6, pady=10, sticky='w')
+        ctk.CTkButton(self.bar, text='■ 停止', fg_color='#8a3f3f', hover_color='#9a4848', width=110, command=self.stop).grid(row=0, column=1, padx=6, pady=10)
+        ctk.CTkButton(self.bar, text='清屏', fg_color='#3d4552', hover_color='#4a5464', width=110, command=self.clear_log).grid(row=0, column=2, padx=6, pady=10)
         self.status_lab = ctk.CTkLabel(self.bar, text='● 未运行', text_color='#e07070')
-        self.status_lab.grid(row=0, column=2, padx=12, pady=10, sticky='e')
-        ctk.CTkLabel(self.bar, text='首页参数=临时调试；合适就存预设').grid(row=0, column=3, padx=8, pady=10, sticky='e')
-        ctk.CTkButton(self.bar, text='⚙ 设置', width=64, fg_color='#4a5568', hover_color='#556271', command=self.open_settings).grid(row=0, column=4, padx=(4, 12), pady=10)
+        self.status_lab.grid(row=0, column=4, padx=12, pady=10, sticky='e')
+        ctk.CTkLabel(self.bar, text='首页参数=临时调试；合适就存预设').grid(row=0, column=5, padx=8, pady=10, sticky='e')
+        ctk.CTkButton(self.bar, text='⚙ 设置', width=64, fg_color='#4a5568', hover_color='#556271', command=self.open_settings).grid(row=0, column=6, padx=(4, 12), pady=10)
 
         f2 = tk.Frame(self.pw, bg='#242424')
         log_head = tk.Frame(f2, bg='#242424')
         log_head.pack(fill='x')
         ctk.CTkLabel(log_head, text='日志', anchor='w', text_color='#8a93a6', font=('Microsoft YaHei', 12)).pack(side='left', padx=(8, 0))
-        ctk.CTkButton(log_head, text='清屏', width=56, height=24, font=('Microsoft YaHei', 11),
-                      fg_color='#3d4552', hover_color='#4a5464', command=self.clear_log).pack(side='right', padx=(0, 8), pady=3)
-        self.svc_info = ctk.CTkLabel(f2, justify='left', anchor='w', text='（未运行）', text_color='#9aa4b8', font=('Consolas', 11))
+        self.svc_info = tk.Text(f2, wrap='word', height=1, bd=0, highlightthickness=0,
+                                relief='flat', padx=2, pady=1, bg='#242424', fg='#9aa4b8',
+                                font=('Consolas', 11), takefocus=0)
         self.svc_info.pack(fill='x', padx=8, pady=(4, 2))
+        self.svc_info.bind('<Key>', self._svc_readonly)
+        self.svc_info.bind('<Configure>', lambda _: self._svc_sync_height())
+        self._set_svc_idle()
         self.log_box = ctk.CTkTextbox(f2, state='disabled', wrap='none', font=('Consolas', 12))
         self.log_box.pack(fill='both', expand=True)
         self.pw.add(f2, weight=1)
@@ -440,8 +472,16 @@ class App(ctk.CTk):
         m = self.current_model
         if not m:
             return
-        self.cfg.setdefault('gemma', {})[m] = bool(self.gemma_chk.get())
+        checked = bool(self.gemma_chk.get())
+        self.cfg.setdefault('gemma', {})[m] = checked
         save_cfg(self.cfg)
+        if checked and not os.path.exists(JINJA):
+            try:
+                with open(JINJA, 'w', encoding='utf-8') as f:
+                    f.write(GEMMA_JINJA_TEMPLATE)
+                self.append_log(f'>>> 已自动生成 Gemma 聊天模板：{JINJA}')
+            except Exception as e:
+                self.append_log(f'!!! 生成 Gemma 聊天模板失败: {e}')
         self.apply_computed_defaults()   # gemma 会影响温度/输出长度
 
     def get_category(self, model):
@@ -769,6 +809,227 @@ class App(ctk.CTk):
         ctk.CTkButton(dlg, text='重命名', width=90, command=do_rename).pack(pady=8)
         ent.bind('<Return>', lambda _: do_rename())
 
+    def find_orphan_presets(self):
+        orphans = {}
+        for model, ps in self.presets.items():
+            if isinstance(ps, dict) and not os.path.exists(os.path.join(MODELS_DIR, model)):
+                orphans[model] = ps
+        return orphans
+
+    def manage_orphan_presets(self):
+        orphans = self.find_orphan_presets()
+        dlg = ctk.CTkToplevel(self)
+        dlg.title('缺失模型的预设')
+        dlg.geometry('480x340')
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.attributes('-topmost', True)
+        if not orphans:
+            ctk.CTkLabel(dlg, text='没有缺失模型的预设，全部有效', font=('Microsoft YaHei', 13)).pack(pady=40)
+            ctk.CTkButton(dlg, text='关闭', width=90, command=dlg.destroy).pack()
+            return
+        ctk.CTkLabel(dlg, text='以下模型的预设在本机 models/ 中不存在：', anchor='w',
+                     font=('Microsoft YaHei', 12)).pack(pady=(14, 4), padx=16, anchor='w')
+        box = ctk.CTkTextbox(dlg, state='disabled', wrap='none', font=('Consolas', 11))
+        box.pack(fill='both', expand=True, padx=16, pady=4)
+        box.configure(state='normal')
+        for model, ps in orphans.items():
+            box.insert('end', f'{model}  （预设：{"、".join(ps.keys())}）\n')
+        box.configure(state='disabled')
+        row = ctk.CTkFrame(dlg, fg_color='transparent')
+        row.pack(pady=(8, 12))
+        ctk.CTkButton(row, text='保留', width=82, command=dlg.destroy).pack(side='left', padx=4)
+        ctk.CTkButton(row, text='删除无效', width=82, fg_color='#8a3f3f', hover_color='#9a4848',
+                      command=lambda: self.delete_orphans(dlg)).pack(side='left', padx=4)
+        ctk.CTkButton(row, text='导出有效', width=82,
+                      command=lambda: self.export_presets(True, dlg)).pack(side='left', padx=4)
+        ctk.CTkButton(row, text='导出无效', width=82,
+                      command=lambda: self.export_presets(False, dlg)).pack(side='left', padx=4)
+
+    def delete_orphans(self, dlg):
+        orphans = self.find_orphan_presets()
+        for m in orphans:
+            self.presets.pop(m, None)
+        save_presets(self.presets)
+        if self.cfg.get('last_preset'):
+            changed = False
+            for m in orphans:
+                if m in self.cfg['last_preset']:
+                    del self.cfg['last_preset'][m]
+                    changed = True
+            if changed:
+                save_cfg(self.cfg)
+        self.append_log(f'>>> 已删除 {len(orphans)} 个缺失模型的预设')
+        self.refresh_preset_menu()
+        dlg.destroy()
+
+    def export_presets(self, valid, dlg):
+        if valid:
+            target = {m: ps for m, ps in self.presets.items()
+                      if isinstance(ps, dict) and os.path.exists(os.path.join(MODELS_DIR, m))}
+            title, fname = '导出有效预设', 'presets_valid.json'
+        else:
+            target = {m: ps for m, ps in self.presets.items()
+                      if isinstance(ps, dict) and not os.path.exists(os.path.join(MODELS_DIR, m))}
+            title, fname = '导出无效预设', 'presets_invalid.json'
+        path = filedialog.asksaveasfilename(parent=dlg, title=title, defaultextension='.json',
+                                            initialfile=fname, filetypes=[('JSON', '*.json')])
+        if not path:
+            return
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(target, f, ensure_ascii=False, indent=2)
+        self.append_log(f'>>> 已导出 {len(target)} 条预设到 {path}')
+        dlg.destroy()
+
+    def import_presets(self):
+        path = filedialog.askopenfilename(title='导入预设（合并）',
+                                          defaultextension='.json', filetypes=[('JSON', '*.json')])
+        if not path:
+            return
+        try:
+            imported = json.load(open(path, encoding='utf-8'))
+        except Exception as e:
+            messagebox.showerror('导入预设', f'读取文件失败：{e}')
+            return
+        if not isinstance(imported, dict):
+            messagebox.showerror('导入预设', '文件格式不对，应为 {模型: {预设名: 参数}}')
+            return
+        added = 0
+        conflicts = []   # (model, name, params) 同名冲突
+        for model, ps in imported.items():
+            if not isinstance(ps, dict):
+                continue
+            cur = self.presets.setdefault(model, {})
+            if not isinstance(cur, dict):
+                cur = {}
+                self.presets[model] = cur
+            for name, params in ps.items():
+                if not isinstance(params, dict):
+                    continue
+                if name in cur:
+                    conflicts.append((model, name, params))
+                else:
+                    cur[name] = params
+                    added += 1
+            if not cur:
+                self.presets.pop(model, None)
+        if not conflicts:
+            save_presets(self.presets)
+            self.refresh_preset_menu()
+            self.append_log(f'>>> 导入预设：新增 {added} 条（无同名冲突）')
+            messagebox.showinfo('导入预设', f'导入完成：新增 {added} 条预设。')
+            return
+        if not self.cfg.get('overwrite_ask', True):
+            self._apply_import_conflicts(conflicts, 'overwrite', added)
+            return
+        self._import_conflict_dialog(conflicts, added)
+
+    def _apply_import_conflicts(self, conflicts, mode, added):
+        overwritten = skipped = 0
+        for model, name, params in conflicts:
+            if mode == 'overwrite':
+                self.presets.setdefault(model, {})[name] = params
+                overwritten += 1
+            else:
+                skipped += 1
+        save_presets(self.presets)
+        self.refresh_preset_menu()
+        msg = f'导入完成：新增 {added} 条'
+        if overwritten:
+            msg += f'，覆盖 {overwritten} 条'
+        if skipped:
+            msg += f'，跳过 {skipped} 条'
+        self.append_log(f'>>> 导入预设：{msg}')
+        messagebox.showinfo('导入预设', msg + '。')
+
+    def _import_conflict_dialog(self, conflicts, added):
+        dlg = ctk.CTkToplevel(self)
+        dlg.title('导入预设冲突')
+        dlg.geometry('400x210')
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.attributes('-topmost', True)
+        ctk.CTkLabel(dlg, text=f'导入发现 {len(conflicts)} 个同名预设', font=('Microsoft YaHei', 13)).pack(pady=(18, 4))
+        noask = ctk.CTkCheckBox(dlg, text='以后同名预设不再提示（同名直接覆盖）')
+        noask.pack(pady=4)
+
+        def choose(mode):
+            if noask.get():
+                self.cfg['overwrite_ask'] = False
+                save_cfg(self.cfg)
+            dlg.destroy()
+            self._apply_import_conflicts(conflicts, mode, added)
+
+        row = ctk.CTkFrame(dlg, fg_color='transparent')
+        row.pack(pady=10)
+        ctk.CTkButton(row, text='覆盖导入的', width=110, command=lambda: choose('overwrite')).pack(side='left', padx=6)
+        ctk.CTkButton(row, text='保留现有的', width=110, command=lambda: choose('skip')).pack(side='left', padx=6)
+
+    def manage_presets_all(self):
+        self._preset_chks = {}
+        dlg = ctk.CTkToplevel(self)
+        dlg.title('批量管理预设')
+        dlg.geometry('540x520')
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.attributes('-topmost', True)
+        ctk.CTkLabel(dlg, text='按模型分组，勾选预设后可批量删除', anchor='w',
+                     text_color='#9aa4b8', font=('Microsoft YaHei', 11)).pack(pady=(14, 4), padx=16, anchor='w')
+        sf = ctk.CTkScrollableFrame(dlg, width=500, height=380)
+        sf.pack(fill='both', expand=True, padx=16, pady=4)
+        for model in sorted(self.presets.keys()):
+            ps = self.presets[model]
+            if not isinstance(ps, dict) or not ps:
+                continue
+            ctk.CTkLabel(sf, text=f'▸ {model}', anchor='w',
+                         font=('Microsoft YaHei', 12, 'bold')).pack(fill='x', pady=(10, 2), padx=4)
+            for name in sorted(ps.keys()):
+                row = ctk.CTkFrame(sf, fg_color='transparent')
+                row.pack(fill='x', padx=18)
+                chk = ctk.CTkCheckBox(row, text=name, width=16)
+                chk.pack(side='left', anchor='w')
+                self._preset_chks[(model, name)] = chk
+        bar = ctk.CTkFrame(dlg, fg_color='transparent')
+        bar.pack(fill='x', padx=16, pady=10)
+
+        def set_all(val):
+            for chk in self._preset_chks.values():
+                chk.select() if val else chk.deselect()
+
+        ctk.CTkButton(bar, text='全选', width=70, command=lambda: set_all(True)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, text='取消全选', width=90, command=lambda: set_all(False)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, text='删除选中', width=90, fg_color='#8a3f3f', hover_color='#9a4848',
+                      command=lambda: self.delete_selected_presets(dlg)).pack(side='right', padx=4)
+        ctk.CTkButton(bar, text='关闭', width=70, command=dlg.destroy).pack(side='right', padx=4)
+
+    def delete_selected_presets(self, dlg):
+        sel = [(m, n) for (m, n), chk in self._preset_chks.items() if chk.get()]
+        if not sel:
+            messagebox.showinfo('删除预设', '未勾选任何预设')
+            return
+        if not messagebox.askyesno('删除预设', f'确认删除 {len(sel)} 条预设？'):
+            return
+        for m, n in sel:
+            if m in self.presets and isinstance(self.presets[m], dict) and n in self.presets[m]:
+                del self.presets[m][n]
+                if not self.presets[m]:
+                    del self.presets[m]
+        lp = self.cfg.get('last_preset', {})
+        changed = False
+        for m, n in sel:
+            if lp.get(m) == n:
+                del lp[m]
+                changed = True
+        if changed:
+            save_cfg(self.cfg)
+        save_presets(self.presets)
+        self.refresh_preset_menu()
+        self.append_log(f'>>> 批量删除 {len(sel)} 条预设')
+        dlg.destroy()
+
     def confirm_overwrite(self, name, callback):
         dlg = ctk.CTkToplevel(self)
         dlg.title('覆盖预设')
@@ -796,7 +1057,7 @@ class App(ctk.CTk):
     def open_settings(self):
         dlg = ctk.CTkToplevel(self)
         dlg.title('设置')
-        dlg.geometry('400x390')
+        dlg.geometry('420x560')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
@@ -818,7 +1079,19 @@ class App(ctk.CTk):
 
         ctk.CTkButton(dlg, text='保存', width=90, command=save).pack(pady=6)
 
+        # 预设健康检查（打开设置即自动检查缺失模型的预设）
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        n_orphan = len(self.find_orphan_presets())
+        ctk.CTkLabel(dlg, text=f'预设健康检查：缺失模型的预设 {n_orphan} 个',
+                     text_color='#e8b04a' if n_orphan else '#7fd9a0').pack(pady=(2, 4))
+        ctk.CTkButton(dlg, text='管理（保留 / 删除 / 导出有效 / 导出无效）', width=280,
+                      command=self.manage_orphan_presets).pack(pady=(0, 6))
+        btns = ctk.CTkFrame(dlg, fg_color='transparent')
+        btns.pack(pady=(0, 8))
+        ctk.CTkButton(btns, text='导入预设（合并）', width=132, command=self.import_presets).pack(side='left', padx=4)
+        ctk.CTkButton(btns, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
+
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
         ctk.CTkLabel(dlg, text=f'LLM GUI · v{VERSION}', font=('Microsoft YaHei', 14, 'bold')).pack()
         ctk.CTkLabel(dlg, text='llama-server 本地桌面启动器', text_color='#9aa4b8').pack(pady=(2, 0))
         ctk.CTkLabel(dlg, text=f'GitHub：{GITHUB_USER}', text_color='#9aa4b8').pack(pady=(8, 0))
@@ -841,14 +1114,53 @@ class App(ctk.CTk):
         host = p.get('host', '127.0.0.1')
         port = p['port']
         if host == '0.0.0.0':
+            hosts = ['127.0.0.1']
             ip = _lan_ip()
-            base = f'http://127.0.0.1:{port}（本机）'
             if ip:
-                base += f'  ·  http://{ip}:{port}（局域网）'
+                hosts.append(ip)
         else:
-            base = f'http://{host}:{port}'
-        body = '\n'.join('  ' + s for s in API_SUFFIXES)
-        self.svc_info.configure(text=f'模型：{model}\nAPI：{base}\n{body}', text_color='#7fd9a0')
+            hosts = [host]
+
+        def tag(h):
+            return '（本机）' if h == '127.0.0.1' else '（局域网）'
+
+        base = ' · '.join(f'http://{h}:{port}{tag(h)}' for h in hosts)
+        urls = ' · '.join(f'http://{h}:{port}{s}' for h in hosts for s in API_SUFFIXES)
+        self.svc_info.delete('1.0', 'end')
+        self.svc_info.insert('1.0', f'模型：{model}\nAPI：{base}\n{urls}')
+        self.svc_info.tag_configure('body', foreground='#7fd9a0')
+        self.svc_info.tag_add('body', '1.0', 'end')
+        self._svc_sync_height()
+
+    def _set_svc_idle(self):
+        self.svc_info.delete('1.0', 'end')
+        self.svc_info.insert('1.0', '（未运行）')
+        self.svc_info.tag_configure('idle', foreground='#9aa4b8')
+        self.svc_info.tag_add('idle', '1.0', 'end')
+        self._svc_sync_height()
+
+    def _svc_readonly(self, event):
+        if event.state & 0x4 and event.keysym.lower() in ('c', 'a'):   # 允许 Ctrl+C / Ctrl+A
+            return None
+        return 'break'   # 其余按键拦截：只读但可选中复制
+
+    def _svc_sync_height(self):
+        try:
+            text = self.svc_info.get('1.0', 'end-1c')
+            if not text:
+                self.svc_info.configure(height=1)
+                return
+            lines = text.split('\n')
+            font = tkfont.Font(font=self.svc_info.cget('font'))
+            w = max(200, self.svc_info.winfo_width() - 12)
+            wrap = 0
+            for l in lines:
+                pw = font.measure(l)
+                if pw > w:
+                    wrap += (pw + w - 1) // w - 1
+            self.svc_info.configure(height=max(1, len(lines) + wrap))
+        except Exception:
+            pass
 
     def build_cmd(self, model, p):
         exe = p.get('server_path') or SERVER_EXE
@@ -880,7 +1192,8 @@ class App(ctk.CTk):
         self.append_log('>>> 启动: ' + ' '.join(args))
         try:
             self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         text=True, encoding='utf-8', errors='replace', bufsize=1)
+                                         text=True, encoding='utf-8', errors='replace', bufsize=1,
+                                         creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except Exception as e:
             self.append_log('!!! 启动失败: ' + str(e)); return
         self.status_lab.configure(text=f'● 运行中 · {self.current_model} · :{p["port"]}', text_color='#7fd9a0')
@@ -896,7 +1209,7 @@ class App(ctk.CTk):
 
     def _mark_stopped(self):
         self.status_lab.configure(text='● 未运行', text_color='#e07070')
-        self.svc_info.configure(text='（未运行）', text_color='#9aa4b8')
+        self._set_svc_idle()
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
@@ -921,6 +1234,7 @@ class App(ctk.CTk):
                 wxh = self.geometry().split('+')[0]   # 逻辑尺寸（反向缩放），避免 winfo×缩放复合放大
                 w, h = wxh.split('x')
                 self.cfg['window_size'] = [int(w), int(h)]
+                self.cfg['sash_pos'] = int(self.pw.sashpos(0))
                 save_cfg(self.cfg)
             except Exception:
                 pass

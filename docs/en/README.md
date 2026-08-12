@@ -52,7 +52,4 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
-- v1.0.3 (2026-08-12) Fix: remembered window size no longer grows on repeated open/close (logical size + screen cap)
-- v1.0.2 (2026-08-12) Rename presets / remember window size
-- v1.0.1 (2026-08-12) Parameter source marker (auto-computed / preset / manual) / remember last selected preset per model
-- v1.0.0 (2026-08-12) Initial release: presets / auto-compute / GPU detection / persistent API address / Gemma option / version & About
+- v1.1.0 (2026-08-12) Initial release: presets / auto-compute defaults from VRAM / GPU detection / persistent API address (selectable & copyable) / Gemma model option (auto-generates missing chat template) / parameter source marker / remember last selected preset per model / rename presets / remember window size & splitter / preset health check in settings (keep/delete/export) / import presets (choose overwrite/keep on conflicts) / batch preset management / silent llama process launch
