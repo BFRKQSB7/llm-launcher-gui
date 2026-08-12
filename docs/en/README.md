@@ -15,6 +15,10 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - Live logs + persistent display of model name and API endpoints (e.g. `/v1/chat/completions`)
 - Single-file exe, no Python installation needed
 
+## Screenshot
+
+![LLM GUI](../../screenshot.png)
+
 ## Quick Start
 
 1. Download the Windows CUDA build of [llama.cpp](https://github.com/ggml-org/llama.cpp/releases), put `llama-server.exe` and its DLLs next to the program
@@ -48,4 +52,6 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.0.2 (2026-08-12) Rename presets / remember window size
+- v1.0.1 (2026-08-12) Parameter source marker (auto-computed / preset / manual) / remember last selected preset per model
 - v1.0.0 (2026-08-12) Initial release: presets / auto-compute / GPU detection / persistent API address / Gemma option / version & About

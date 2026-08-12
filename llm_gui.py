@@ -35,7 +35,7 @@ PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
-VERSION = '1.0.1'
+VERSION = '1.0.2'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -193,6 +193,12 @@ class App(ctk.CTk):
         self.current_model = None
         self.presets = load_presets()
         self.cfg = load_cfg()
+        ws = self.cfg.get('window_size')
+        if self.cfg.get('remember_size', True) and isinstance(ws, list) and len(ws) == 2:
+            try:
+                self.geometry(f'{int(ws[0])}x{int(ws[1])}')
+            except (TypeError, ValueError):
+                pass
         self._build_ui()
         self.load_models()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -239,6 +245,7 @@ class App(ctk.CTk):
         ctk.CTkButton(self.top_frame, text='存为预设', width=80, command=self.save_preset).grid(row=1, column=4, padx=6, pady=6)
         self.del_btn = ctk.CTkButton(self.top_frame, text='删预设', width=70, fg_color='#7a4a4a', hover_color='#8a5555', command=self.del_preset)
         self.del_btn.grid(row=1, column=5, padx=(6, 12), pady=6)
+        ctk.CTkButton(self.top_frame, text='重命名', width=70, fg_color='#4a5568', hover_color='#556271', command=self.rename_preset).grid(row=1, column=6, padx=(6, 12), pady=6)
 
         # 参数区 / 日志区 用 ttk.Panedwindow（sash 原生可拖，1:1 且顺滑）
         self.pw = ttk.Panedwindow(self, orient='vertical')
@@ -718,6 +725,47 @@ class App(ctk.CTk):
             self.refresh_preset_menu()
             self.append_log(f'>>> 已删预设「{n}」')
 
+    def rename_preset(self):
+        n = self.preset_sel.get()
+        if not n or n == '（无预设）' or not self.current_model:
+            self.append_log('!!! 先在下拉里选要重命名的预设')
+            return
+        dlg = ctk.CTkToplevel(self)
+        dlg.title('重命名预设')
+        dlg.geometry('360x170')
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.attributes('-topmost', True)
+        ctk.CTkLabel(dlg, text=f'重命名「{n}」', font=('Microsoft YaHei', 13)).pack(pady=(16, 6))
+        ent = ctk.CTkEntry(dlg, width=250)
+        ent.insert(0, n)
+        ent.pack(pady=4)
+        ent.select_range(0, 'end')
+        ent.focus_set()
+
+        def do_rename():
+            new = ent.get().strip()
+            if not new or new == n:
+                dlg.destroy()
+                return
+            if new in self.presets.get(self.current_model, {}):
+                messagebox.showwarning('重命名预设', f'预设「{new}」已存在')
+                return
+            self.presets[self.current_model][new] = self.presets[self.current_model].pop(n)
+            save_presets(self.presets)
+            if self.cfg.get('last_preset', {}).get(self.current_model) == n:
+                self.cfg['last_preset'][self.current_model] = new
+                save_cfg(self.cfg)
+            self.refresh_preset_menu()
+            self.preset_sel.set(new)
+            self.param_src_lab.configure(text=f'📌 预设：{new}', text_color='#e8c468')
+            self.append_log(f'>>> 已重命名预设「{n}」→「{new}」')
+            dlg.destroy()
+
+        ctk.CTkButton(dlg, text='重命名', width=90, command=do_rename).pack(pady=8)
+        ent.bind('<Return>', lambda _: do_rename())
+
     def confirm_overwrite(self, name, callback):
         dlg = ctk.CTkToplevel(self)
         dlg.title('覆盖预设')
@@ -745,7 +793,7 @@ class App(ctk.CTk):
     def open_settings(self):
         dlg = ctk.CTkToplevel(self)
         dlg.title('设置')
-        dlg.geometry('400x340')
+        dlg.geometry('400x390')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
@@ -754,9 +802,14 @@ class App(ctk.CTk):
         if self.cfg.get('overwrite_ask', True):
             ask.select()
         ask.pack(pady=(22, 8), padx=24, anchor='w')
+        sizebox = ctk.CTkCheckBox(dlg, text='记录窗口大小（下次启动恢复同样大小）')
+        if self.cfg.get('remember_size', True):
+            sizebox.select()
+        sizebox.pack(pady=6, padx=24, anchor='w')
 
         def save():
             self.cfg['overwrite_ask'] = bool(ask.get())
+            self.cfg['remember_size'] = bool(sizebox.get())
             save_cfg(self.cfg)
             dlg.destroy()
 
@@ -860,6 +913,12 @@ class App(ctk.CTk):
                 self.proc.wait(timeout=5)
             except Exception:
                 self.proc.kill()
+        if self.cfg.get('remember_size', True):
+            try:
+                self.cfg['window_size'] = [self.winfo_width(), self.winfo_height()]
+                save_cfg(self.cfg)
+            except Exception:
+                pass
         self.destroy()
 
 

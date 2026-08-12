@@ -15,6 +15,10 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 - 实时日志 + 常驻显示模型名与 API 地址（含 `/v1/chat/completions` 等端点）
 - 单文件 exe，无需安装 Python
 
+## 界面预览
+
+![LLM GUI 界面](screenshot.png)
+
 ## 快速开始
 
 1. 下载 [llama.cpp](https://github.com/ggml-org/llama.cpp/releases) Windows CUDA 版，将 `llama-server.exe` 及其 DLL 放到程序同目录
@@ -48,4 +52,6 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## 版本
 
+- v1.0.2（2026-08-12）预设重命名 / 记住窗口大小
+- v1.0.1（2026-08-12）参数来源标识（自动计算/预设/手动调整）/ 记住每个模型上次选的预设
 - v1.0.0（2026-08-12）首版：预设 / 自动计算 / GPU 检测 / 常驻 API 地址 / Gemma 选项 / 版本号与 About
