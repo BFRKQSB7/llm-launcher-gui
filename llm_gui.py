@@ -46,7 +46,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.1.1'
+VERSION = '1.1.2'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -287,7 +287,7 @@ class App(ctk.CTk):
         self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=['未指定', '聊天', '通用', '翻译', '角色扮演', '文学创作'], width=110,
                                          command=lambda _: self.on_category_change())
         self.cat_sel.grid(row=0, column=3, padx=6, pady=6, sticky='w')
-        self.compute_btn = ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults())
+        self.compute_btn = ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults(force=True))
         ToolTip(self.compute_btn, '按本机显存 + 模型大小，自动计算当前模型的默认参数')
         self.compute_btn.grid(row=0, column=4, padx=(10, 12), pady=6)
         self.param_src_lab = ctk.CTkLabel(self.top_frame, text='', text_color='#8ab4f8', font=('Microsoft YaHei', 11))
@@ -482,13 +482,17 @@ class App(ctk.CTk):
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
-        # 记住上次选的预设：切回该模型时自动应用
-        last = self.cfg.get('last_preset', {}).get(m)
-        if last and last in self.presets.get(m, {}):
-            self.preset_sel.set(last)
-            self.set_params(self.presets[m][last])
-            self.param_src_lab.configure(text=f'📌 预设：{last}', text_color='#e8c468')
+        # 有可用预设 → 优先用预设（上次选的 >「默认」> 第一个），都不动自动计算
+        ps = self.presets.get(m, {})
+        if isinstance(ps, dict) and ps:
+            last = self.cfg.get('last_preset', {}).get(m)
+            pick = last if (last and last in ps) else ('默认' if '默认' in ps else next(iter(ps)))
+            self.preset_sel.set(pick)
+            self.set_params(ps[pick])
+            self.param_src_lab.configure(text=f'📌 预设：{pick}', text_color='#e8c468')
             self._preset_locked = True
+            self.cfg.setdefault('last_preset', {})[m] = pick
+            save_cfg(self.cfg)
         else:
             self._preset_locked = False
             self.param_src_lab.configure(text='')
@@ -514,6 +518,7 @@ class App(ctk.CTk):
                 self.append_log(f'>>> 已自动生成 Gemma 聊天模板：{JINJA}')
             except Exception as e:
                 self.append_log(f'!!! 生成 Gemma 聊天模板失败: {e}')
+        self._preset_locked = False   # 用户主动切换 → 重新按 gemma 计算
         self.apply_computed_defaults()   # gemma 会影响温度/输出长度
 
     def get_category(self, model):
@@ -563,9 +568,9 @@ class App(ctk.CTk):
             try:
                 kind = item[0]
                 if kind == 'params':
-                    _, model, cat, params, vram = item
+                    _, model, cat, params, vram, force = item
                     self._save_computed_defaults(model, params)
-                    if self.current_model == model and not self._preset_locked:
+                    if self.current_model == model and (force or not self._preset_locked):
                         self.set_params(params)
                         self.param_src_lab.configure(text=f'⚡ 自动计算（{vram}G 显存 + 模型大小）', text_color='#8ab4f8')
                         self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）')
@@ -611,7 +616,7 @@ class App(ctk.CTk):
     def recheck_hardware(self):
         self._detect_and_save_hardware(then_compute=True)
 
-    def apply_computed_defaults(self, model=None):
+    def apply_computed_defaults(self, model=None, force=False):
         model = model or self.current_model
         if not model:
             return
@@ -620,7 +625,7 @@ class App(ctk.CTk):
         def work():
             try:
                 params = self.compute_defaults(model, cat)
-                self._q.put(('params', model, cat, params, self.get_vram_gb()))
+                self._q.put(('params', model, cat, params, self.get_vram_gb(), force))
             except Exception as e:
                 self._q.put(('error', f'计算默认参数失败: {e}'))
 
