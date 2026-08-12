@@ -46,7 +46,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.1.2'
+VERSION = '1.1.3'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -477,8 +477,6 @@ class App(ctk.CTk):
             return
         self.current_model = m
         stem = m[:-5] if m.lower().endswith('.gguf') else m
-        self.preset_name.delete(0, 'end')
-        self.preset_name.insert(0, stem)
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
@@ -489,12 +487,16 @@ class App(ctk.CTk):
             pick = last if (last and last in ps) else ('默认' if '默认' in ps else next(iter(ps)))
             self.preset_sel.set(pick)
             self.set_params(ps[pick])
+            self.preset_name.delete(0, 'end')
+            self.preset_name.insert(0, pick)   # 输入框显示预设名
             self.param_src_lab.configure(text=f'📌 预设：{pick}', text_color='#e8c468')
             self._preset_locked = True
             self.cfg.setdefault('last_preset', {})[m] = pick
             save_cfg(self.cfg)
         else:
             self._preset_locked = False
+            self.preset_name.delete(0, 'end')
+            self.preset_name.insert(0, stem)   # 无预设 → 输入框显示模型名
             self.param_src_lab.configure(text='')
             self.apply_computed_defaults(m)
 
@@ -672,6 +674,12 @@ class App(ctk.CTk):
             save_cfg(self.cfg)
             self.preset_name.delete(0, 'end')
             self.preset_name.insert(0, n)
+        else:
+            m = self.current_model   # 选「（无预设）」→ 输入框恢复模型名
+            if m:
+                stem = m[:-5] if m.lower().endswith('.gguf') else m
+                self.preset_name.delete(0, 'end')
+                self.preset_name.insert(0, stem)
         self.update_preset_controls()
 
     def set_params(self, p):

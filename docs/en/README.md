@@ -52,6 +52,7 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.1.3 (2026-08-12) Fix: input box reverts to the model name when selecting "no preset" or switching to a model without presets (no longer keeps the previous preset name)
 - v1.1.2 (2026-08-12) Optimization: when a model has usable presets, apply the preset first (last-selected > "默认" > first), auto-compute only when there is no preset; clicking "compute defaults" / changing category / toggling Gemma actively overrides
 - v1.1.1 (2026-08-12) Polish: delete-preset button turns vivid when enabled / tooltips left-aligned below source (auto right-align near right edge) / dialogs use app icon and center on main window / Gemma checkbox moved under max output / rename uses the input box text / loading a preset fills the input box with its name
 - v1.1.0 (2026-08-12) Initial release: presets / auto-compute defaults from VRAM / GPU detection / persistent API address (selectable & copyable) / Gemma model option (auto-generates missing chat template) / parameter source marker / remember last selected preset per model / rename presets / remember window size & splitter / preset health check in settings (keep/delete/export) / import presets (choose overwrite/keep on conflicts) / batch preset management / silent llama process launch
