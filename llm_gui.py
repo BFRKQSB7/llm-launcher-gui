@@ -402,15 +402,23 @@ class App(ctk.CTk):
         if not m or m.startswith('（'):
             return
         self.current_model = m
-        self._preset_locked = False
         stem = m[:-5] if m.lower().endswith('.gguf') else m
         self.preset_name.delete(0, 'end')
         self.preset_name.insert(0, stem)
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
-        self.param_src_lab.configure(text='')
-        self.apply_computed_defaults(m)
+        # 记住上次选的预设：切回该模型时自动应用
+        last = self.cfg.get('last_preset', {}).get(m)
+        if last and last in self.presets.get(m, {}):
+            self.preset_sel.set(last)
+            self.set_params(self.presets[m][last])
+            self.param_src_lab.configure(text=f'📌 预设：{last}', text_color='#e8c468')
+            self._preset_locked = True
+        else:
+            self._preset_locked = False
+            self.param_src_lab.configure(text='')
+            self.apply_computed_defaults(m)
 
     def is_gemma(self, model):
         flags = self.cfg.get('gemma', {})
@@ -568,6 +576,8 @@ class App(ctk.CTk):
             self.set_params(self.presets[self.current_model][n])
             self.param_src_lab.configure(text=f'📌 预设：{n}', text_color='#e8c468')
             self._preset_locked = True   # 加载预设后，挂起的自动计算不覆盖用户预设参数
+            self.cfg.setdefault('last_preset', {})[self.current_model] = n
+            save_cfg(self.cfg)
         self.update_preset_controls()
 
     def set_params(self, p):
@@ -684,6 +694,9 @@ class App(ctk.CTk):
             save_presets(self.presets)
             self.refresh_preset_menu()
             self.preset_sel.set(name)
+            self.cfg.setdefault('last_preset', {})[self.current_model] = name
+            save_cfg(self.cfg)
+            self.param_src_lab.configure(text=f'📌 预设：{name}', text_color='#e8c468')
             self.update_preset_controls()
             self.append_log(f'>>> 已存预设「{name}」({self.current_model})')
 
@@ -699,6 +712,9 @@ class App(ctk.CTk):
         if n in self.presets.get(self.current_model, {}):
             del self.presets[self.current_model][n]
             save_presets(self.presets)
+            if self.cfg.get('last_preset', {}).get(self.current_model) == n:
+                self.cfg['last_preset'].pop(self.current_model, None)
+                save_cfg(self.cfg)
             self.refresh_preset_menu()
             self.append_log(f'>>> 已删预设「{n}」')
 
