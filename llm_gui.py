@@ -46,7 +46,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -160,8 +160,12 @@ class ToolTip:
     def show(self, e=None):
         if self.lab.winfo_ismapped():
             return
-        x = self.widget.winfo_rootx() - self.master.winfo_rootx() + 18
-        y = self.widget.winfo_rooty() - self.master.winfo_rooty() + 22
+        mx = self.master.winfo_width()
+        x = self.widget.winfo_rootx() - self.master.winfo_rootx() + 2
+        y = self.widget.winfo_rooty() - self.master.winfo_rooty() + self.widget.winfo_height() + 12
+        tw = self.lab.winfo_reqwidth()
+        if x + tw > mx - 6:   # 超出右缘 → 右对齐（如靠右的按钮）
+            x = max(4, mx - tw - 6)
         self.lab.place_configure(x=x, y=y)
         self.lab.lift()
         self._start = __import__('time').time()
@@ -245,7 +249,26 @@ class App(ctk.CTk):
             fd, path = tempfile.mkstemp(suffix='.ico')
             with os.fdopen(fd, 'wb') as f:
                 f.write(base64.b64decode(APP_ICON_B64))
+            self._icon_path = path
             self.iconbitmap(path)
+        except Exception:
+            pass
+
+    def _apply_icon(self, w):
+        try:
+            if getattr(self, '_icon_path', None):
+                w.iconbitmap(self._icon_path)
+        except Exception:
+            pass
+
+    def _center_on_main(self, w):
+        try:
+            w.update_idletasks()
+            size = w.geometry().split('+')[0]   # 如 '420x560'
+            W, H = map(int, size.split('x'))
+            x = self.winfo_rootx() + max(0, (self.winfo_width() - W) // 2)
+            y = self.winfo_rooty() + max(0, (self.winfo_height() - H) // 2)
+            w.geometry(f'{size}+{x}+{y}')
         except Exception:
             pass
 
@@ -264,7 +287,9 @@ class App(ctk.CTk):
         self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=['未指定', '聊天', '通用', '翻译', '角色扮演', '文学创作'], width=110,
                                          command=lambda _: self.on_category_change())
         self.cat_sel.grid(row=0, column=3, padx=6, pady=6, sticky='w')
-        ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults()).grid(row=0, column=4, padx=(10, 12), pady=6)
+        self.compute_btn = ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults())
+        ToolTip(self.compute_btn, '按本机显存 + 模型大小，自动计算当前模型的默认参数')
+        self.compute_btn.grid(row=0, column=4, padx=(10, 12), pady=6)
         self.param_src_lab = ctk.CTkLabel(self.top_frame, text='', text_color='#8ab4f8', font=('Microsoft YaHei', 11))
         self.param_src_lab.grid(row=0, column=5, padx=(0, 12), pady=6, sticky='w')
         # 第二行：预设
@@ -273,10 +298,15 @@ class App(ctk.CTk):
         self.preset_sel.grid(row=1, column=1, padx=6, pady=6, sticky='w')
         self.preset_name = ctk.CTkEntry(self.top_frame, placeholder_text='新预设名（默认=模型名）')
         self.preset_name.grid(row=1, column=2, columnspan=2, padx=6, pady=6, sticky='ew')
-        ctk.CTkButton(self.top_frame, text='存为预设', width=80, command=self.save_preset).grid(row=1, column=4, padx=6, pady=6)
+        self.save_btn = ctk.CTkButton(self.top_frame, text='存为预设', width=80, command=self.save_preset)
+        ToolTip(self.save_btn, '把当前参数保存为预设（名称用左边输入框的文字）')
+        self.save_btn.grid(row=1, column=4, padx=6, pady=6)
         self.del_btn = ctk.CTkButton(self.top_frame, text='删预设', width=70, fg_color='#7a4a4a', hover_color='#8a5555', command=self.del_preset)
+        ToolTip(self.del_btn, '删除下拉中当前选中的预设')
         self.del_btn.grid(row=1, column=5, padx=(6, 12), pady=6)
-        ctk.CTkButton(self.top_frame, text='重命名', width=70, fg_color='#4a5568', hover_color='#556271', command=self.rename_preset).grid(row=1, column=6, padx=(6, 12), pady=6)
+        self.rename_btn = ctk.CTkButton(self.top_frame, text='重命名', width=70, fg_color='#4a5568', hover_color='#556271', command=self.rename_preset)
+        ToolTip(self.rename_btn, '把下拉中选中的预设，改名为左边输入框里的文字')
+        self.rename_btn.grid(row=1, column=6, padx=(6, 12), pady=6)
 
         # 参数区 / 日志区 用 ttk.Panedwindow（sash 原生可拖，1:1 且顺滑）
         self.pw = ttk.Panedwindow(self, orient='vertical')
@@ -349,7 +379,9 @@ class App(ctk.CTk):
         rowg.grid(row=base + 1, column=1, sticky='w', padx=(6, 14), pady=5)
         self.gpu_sel = ctk.CTkOptionMenu(rowg, values=['自动'], width=260)
         self.gpu_sel.pack(side='left')
-        ctk.CTkButton(rowg, text='检查配置', width=68, command=self.recheck_hardware).pack(side='left', padx=(8, 0))
+        self.recheck_btn = ctk.CTkButton(rowg, text='检查配置', width=68, command=self.recheck_hardware)
+        ToolTip(self.recheck_btn, '重新检测本机显卡与显存')
+        self.recheck_btn.pack(side='left', padx=(8, 0))
 
         # 可选参数：批处理大小
         lab = ctk.CTkLabel(pf, text='批处理大小', anchor='w', width=110)
@@ -365,9 +397,9 @@ class App(ctk.CTk):
         self.w_server_path = ctk.CTkEntry(pf, width=170, placeholder_text='留空=默认')
         self.w_server_path.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
 
-        # Gemma 模型（可选勾选，替代仅按文件名判断）
-        self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型（专用聊天模板 + 建议低温）', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=base + 4, column=0, columnspan=3, padx=(14, 6), pady=5, sticky='w')
+        # Gemma 模型（可选勾选，替代仅按文件名判断；放在最大输出下面）
+        self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
+        self.gemma_chk.grid(row=5, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
         ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。默认按文件名自动判断，可手动勾选/取消覆盖；按模型记住。')
 
         self.bar = ctk.CTkFrame(self)
@@ -618,7 +650,12 @@ class App(ctk.CTk):
 
     def update_preset_controls(self):
         sel = self.preset_sel.get()
-        self.del_btn.configure(state='normal' if sel and sel != '（无预设）' else 'disabled')
+        enabled = bool(sel and sel != '（无预设）')
+        self.del_btn.configure(state='normal' if enabled else 'disabled')
+        if enabled:
+            self.del_btn.configure(fg_color='#c0392b', hover_color='#e74c3c')   # 可用：鲜艳红
+        else:
+            self.del_btn.configure(fg_color='#7a4a4a', hover_color='#8a5555')   # 不可用：暗红
 
     def on_preset_load(self):
         n = self.preset_sel.get()
@@ -628,6 +665,8 @@ class App(ctk.CTk):
             self._preset_locked = True   # 加载预设后，挂起的自动计算不覆盖用户预设参数
             self.cfg.setdefault('last_preset', {})[self.current_model] = n
             save_cfg(self.cfg)
+            self.preset_name.delete(0, 'end')
+            self.preset_name.insert(0, n)
         self.update_preset_controls()
 
     def set_params(self, p):
@@ -773,41 +812,27 @@ class App(ctk.CTk):
         if not n or n == '（无预设）' or not self.current_model:
             self.append_log('!!! 先在下拉里选要重命名的预设')
             return
-        dlg = ctk.CTkToplevel(self)
-        dlg.title('重命名预设')
-        dlg.geometry('360x170')
-        dlg.resizable(False, False)
-        dlg.transient(self)
-        dlg.grab_set()
-        dlg.attributes('-topmost', True)
-        ctk.CTkLabel(dlg, text=f'重命名「{n}」', font=('Microsoft YaHei', 13)).pack(pady=(16, 6))
-        ent = ctk.CTkEntry(dlg, width=250)
-        ent.insert(0, n)
-        ent.pack(pady=4)
-        ent.select_range(0, 'end')
-        ent.focus_set()
-
-        def do_rename():
-            new = ent.get().strip()
-            if not new or new == n:
-                dlg.destroy()
-                return
-            if new in self.presets.get(self.current_model, {}):
-                messagebox.showwarning('重命名预设', f'预设「{new}」已存在')
-                return
-            self.presets[self.current_model][new] = self.presets[self.current_model].pop(n)
-            save_presets(self.presets)
-            if self.cfg.get('last_preset', {}).get(self.current_model) == n:
-                self.cfg['last_preset'][self.current_model] = new
-                save_cfg(self.cfg)
-            self.refresh_preset_menu()
-            self.preset_sel.set(new)
-            self.param_src_lab.configure(text=f'📌 预设：{new}', text_color='#e8c468')
-            self.append_log(f'>>> 已重命名预设「{n}」→「{new}」')
-            dlg.destroy()
-
-        ctk.CTkButton(dlg, text='重命名', width=90, command=do_rename).pack(pady=8)
-        ent.bind('<Return>', lambda _: do_rename())
+        new = self.preset_name.get().strip()
+        if not new:
+            self.append_log('!!! 先填新预设名（左边输入框）')
+            return
+        if new == n:
+            self.append_log('!!! 新名字与原来相同')
+            return
+        if new in self.presets.get(self.current_model, {}):
+            messagebox.showwarning('重命名预设', f'预设「{new}」已存在')
+            return
+        self.presets[self.current_model][new] = self.presets[self.current_model].pop(n)
+        save_presets(self.presets)
+        if self.cfg.get('last_preset', {}).get(self.current_model) == n:
+            self.cfg['last_preset'][self.current_model] = new
+            save_cfg(self.cfg)
+        self.refresh_preset_menu()
+        self.preset_sel.set(new)
+        self.preset_name.delete(0, 'end')
+        self.preset_name.insert(0, new)
+        self.param_src_lab.configure(text=f'📌 预设：{new}', text_color='#e8c468')
+        self.append_log(f'>>> 已重命名预设「{n}」→「{new}」')
 
     def find_orphan_presets(self):
         orphans = {}
@@ -819,11 +844,13 @@ class App(ctk.CTk):
     def manage_orphan_presets(self):
         orphans = self.find_orphan_presets()
         dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
         dlg.title('缺失模型的预设')
         dlg.geometry('480x340')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         if not orphans:
             ctk.CTkLabel(dlg, text='没有缺失模型的预设，全部有效', font=('Microsoft YaHei', 13)).pack(pady=40)
@@ -945,11 +972,13 @@ class App(ctk.CTk):
 
     def _import_conflict_dialog(self, conflicts, added):
         dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
         dlg.title('导入预设冲突')
         dlg.geometry('400x210')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         ctk.CTkLabel(dlg, text=f'导入发现 {len(conflicts)} 个同名预设', font=('Microsoft YaHei', 13)).pack(pady=(18, 4))
         noask = ctk.CTkCheckBox(dlg, text='以后同名预设不再提示（同名直接覆盖）')
@@ -970,11 +999,13 @@ class App(ctk.CTk):
     def manage_presets_all(self):
         self._preset_chks = {}
         dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
         dlg.title('批量管理预设')
         dlg.geometry('540x520')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         ctk.CTkLabel(dlg, text='按模型分组，勾选预设后可批量删除', anchor='w',
                      text_color='#9aa4b8', font=('Microsoft YaHei', 11)).pack(pady=(14, 4), padx=16, anchor='w')
@@ -1032,11 +1063,13 @@ class App(ctk.CTk):
 
     def confirm_overwrite(self, name, callback):
         dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
         dlg.title('覆盖预设')
         dlg.geometry('380x190')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         ctk.CTkLabel(dlg, text=f'预设「{name}」已存在，覆盖吗？', font=('Microsoft YaHei', 14)).pack(pady=(20, 6))
         noask = ctk.CTkCheckBox(dlg, text='以后不再提示（同名直接覆盖，可在设置里重新开启）')
@@ -1056,11 +1089,13 @@ class App(ctk.CTk):
 
     def open_settings(self):
         dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
         dlg.title('设置')
         dlg.geometry('420x560')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         ask = ctk.CTkCheckBox(dlg, text='保存预设时询问是否覆盖同名预设')
         if self.cfg.get('overwrite_ask', True):
