@@ -97,7 +97,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -528,7 +528,6 @@ class App(ctk.CTk):
         ctk.CTkButton(self.bar, text='清屏', fg_color='#3d4552', hover_color='#4a5464', width=110, command=self.clear_log).grid(row=0, column=2, padx=6, pady=10)
         self.status_lab = ctk.CTkLabel(self.bar, text='● 未运行', text_color='#e07070')
         self.status_lab.grid(row=0, column=4, padx=12, pady=10, sticky='e')
-        ctk.CTkLabel(self.bar, text='首页参数=临时调试；合适就存预设').grid(row=0, column=5, padx=8, pady=10, sticky='e')
         ctk.CTkButton(self.bar, text='⚙ 设置', width=64, fg_color='#4a5568', hover_color='#556271', command=self.open_settings).grid(row=0, column=6, padx=(4, 12), pady=10)
 
         f2 = tk.Frame(self.pw, bg='#242424')
@@ -1323,6 +1322,10 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text='导入预设（合并）', width=132, command=self.import_presets).pack(side='left', padx=4)
         ctk.CTkButton(btns, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
 
+        # 模型清单（弹出独立窗口）
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        ctk.CTkButton(dlg, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
+
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
         ctk.CTkLabel(dlg, text=f'LLM GUI · v{VERSION}', font=('Microsoft YaHei', 14, 'bold')).pack()
         ctk.CTkLabel(dlg, text='llama-server 本地桌面启动器', text_color='#9aa4b8').pack(pady=(2, 0))
@@ -1330,6 +1333,41 @@ class App(ctk.CTk):
         link = ctk.CTkLabel(dlg, text=GITHUB_URL, text_color='#7db4ff', cursor='hand2', font=('Consolas', 11))
         link.pack(pady=(2, 0))
         link.bind('<Button-1>', lambda _: webbrowser.open(GITHUB_URL))
+
+    def show_model_list(self):
+        """弹出模型清单窗口：models/ 下所有模型 + 大小 + 总占用"""
+        dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
+        dlg.title('模型清单')
+        dlg.geometry('480x520')
+        dlg.resizable(True, True)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
+        dlg.attributes('-topmost', True)
+        models = self.models_list()
+        ctk.CTkLabel(dlg, text=f'models/ 目录（{os.path.normpath(MODELS_DIR)}）共 {len(models)} 个：',
+                     anchor='w', font=('Microsoft YaHei', 12)).pack(pady=(14, 4), padx=16, anchor='w')
+        box = ctk.CTkTextbox(dlg, state='disabled', wrap='none', font=('Consolas', 12))
+        box.pack(fill='both', expand=True, padx=16, pady=4)
+        lines = []
+        total = 0
+        for f in models:
+            try:
+                sz = os.path.getsize(os.path.join(MODELS_DIR, f))
+            except OSError:
+                sz = 0
+            total += sz
+            size_s = f'{sz / (1024 ** 3):.2f} GB' if sz >= 1024 ** 3 else f'{sz / (1024 ** 2):.0f} MB'
+            lines.append(f'{clean_model_display(f):<42}{size_s:>9}')
+        if models:
+            total_s = f'{total / (1024 ** 3):.2f} GB' if total >= 1024 ** 3 else f'{total / (1024 ** 2):.0f} MB'
+            lines.append('-' * 51)
+            lines.append('总占用' + ' ' * 36 + f'{total_s:>9}')   # 3 个中文=显示宽 6，补 36 空格对齐 42 列
+        box.configure(state='normal')
+        box.insert('1.0', '\n'.join(lines) if lines else '（models 目录为空）')
+        box.configure(state='disabled')
+        ctk.CTkButton(dlg, text='关闭', width=90, command=dlg.destroy).pack(pady=10)
 
     def append_log(self, line):
         self.log_box.configure(state='normal')
@@ -1460,7 +1498,10 @@ class App(ctk.CTk):
                                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except Exception as e:
             self.append_log('!!! 启动失败: ' + str(e)); return
-        self.status_lab.configure(text=f'● 运行中 · {clean_model_display(self.current_model)} · :{p.get("port") or 8080}', text_color='#7fd9a0')
+        # 状态文本截断模型名：长名会把右侧「设置」按钮顶出窗口
+        mname = clean_model_display(self.current_model)
+        if len(mname) > 24: mname = mname[:22] + '…'
+        self.status_lab.configure(text=f'● 运行中 · {mname} · :{p.get("port") or 8080}', text_color='#7fd9a0')
         self.update_svc_info(self.current_model, p)
         threading.Thread(target=self._read, daemon=True).start()
 

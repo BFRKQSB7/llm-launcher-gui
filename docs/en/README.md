@@ -63,6 +63,10 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.3.0 (2026-08-14) New + fix:
+  - New: Settings → "📦 Model list" — a popup window listing every model in `models/` with its size and a total-usage footer
+  - Fix: a long model name in the running status pushed the Settings button off the right edge (status text now truncates the model name)
+  - Removed: the "首页参数=临时调试" debug hint in the parameter bar
 - v1.2.0 (2026-08-14) Consolidated update (everything since v1.1.4, none released separately):
   - New: thinking-mode toggle (default on, `--reasoning on/off`); multimodal toggle (vision models → `--mmproj`, auto-matching the projector file in `models/`)
   - Refactor: thinking / Gemma / multimodal are now **preset parameters** (saved into `llm_presets.json`); **every parameter can be left empty** — empty fields are not passed to llama-server, which uses its own defaults (dropdowns gained a "（默认）" blank option); the llama-server path is now a **global setting** (moved into the Settings dialog, with a browse button)
