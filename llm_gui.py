@@ -5,12 +5,63 @@
 - 扫描 models/ 列模型；每模型多套预设
 - 上下文长度：自定义 + 右侧预设下拉（4K~64K）
 - 并发请求 1/2/4/8/16 → 自动算每线程上下文（并发=1 不显示）
+- 思考模式开关（默认开，存为预设参数）：on→--reasoning on / off→--reasoning off（Murasaki/Qwen3/DeepSeek 等推理模型）
 - GPU 下拉（自动检测 + 手动刷新）→ --main-gpu
 - 监听地址带 [本机]/[局域网] 提示
-- 可选参数（批处理大小 / 自定义 llama 路径）：留空不传给 llama-server
+- 所有参数可留空：空字段 = 不传给 llama-server，用 llama 默认值（llama 路径为「设置」里的全局项）
 - 启动/停止 llama-server 子进程，日志实时滚动
 打包：pyinstaller --onefile --windowed --name LLMGUI --collect-all customtkinter llm_gui.py
 """
+
+# ==================== 维护目录（改动前先读；检索锚点 = 精确搜索串） ====================
+# 文件组织：单文件 llm_gui.py。自上而下：常量 → 文件读写 → 硬件检测 → ToolTip → App 类 → main。
+#
+# 一、全局常量（改默认值/路径先搜这里）
+#   - 路径：MODELS_DIR / PRESETS_FILE / CONFIG_FILE / DEFAULTS_FILE / SERVER_EXE / JINJA
+#     → 检索「MODELS_DIR =」
+#   - CTX_PRESETS（上下文档 4K~64K）/ PARALLEL_OPTS（并发档）→ 检索「CTX_PRESETS =」
+#   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port）。UI 按此表自动排两列。
+#     → 检索「PARAMS =」；加新简单参数只需在此表加一条，UI 行号自动推
+#   - GEMMA_JINJA_TEMPLATE / VERSION / GITHUB_* → 检索「GEMMA_JINJA_TEMPLATE =」「VERSION =」
+#
+# 二、数据文件（与程序同目录 JSON，个人文件 gitignore 不入库）
+#   - llm_gui_config.json：窗口/sash、硬件缓存、categories、server_path（llama 路径，全局）、
+#     gemma（自动判断覆盖）、last_model/last_preset、overwrite_ask/remember_size
+#   - llm_presets.json：{模型: {预设名: 参数}}（支持 JSONC 注释；模板见 presets_template.json）
+#     llm_default_presets.json：自动计算缓存
+#   → 读写函数检索「def load_cfg」「def load_presets」「def _strip_jsonc」
+#
+# 三、顶层函数 / 类
+#   _lan_ip() 局域网IP / detect_gpus() 显卡列表 / detect_vram_gb() 显存GB → 检索「def detect_」
+#   ToolTip 悬浮提示（place 到主窗，无独立窗口）→ 检索「class ToolTip」
+#
+# 四、App 类（主窗口，方法按功能分组）
+#   - 初始化/生命周期：__init__ / _build_ui（全部 UI 在此构建）/ on_close → 检索「def _build_ui」
+#   - 参数区网格行号表（CTkScrollableFrame；改布局先看这）：
+#       row0 上下文长度 | row1 并行请求
+#       row2 GPU层数(col0) / Flash(col2) | row3 KV缓存 / 温度 | row4 top-p / 最大输出
+#       row5 port / 思考模式 | row6 监听地址(col0-1) / 多模态(col2)
+#       row7 显卡(col0) / Gemma(col2) | row8 批处理大小（llama 路径已移到「设置」全局项）
+#     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 行由表长自动推；
+#     思考模式(row5,2)、多模态(row6,2)、Gemma(row7,2) 为硬编码，增删 PARAMS 项后须手动检查这三行
+#   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
+#     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
+#     思考模式/多模态 thinking/mm 已是预设参数（thinking 默认开、mm 默认关）
+#   - 多模态投影：find_mmproj（models/ 里按文件名匹配 mmproj 投影文件）→ 检索「def find_mmproj」
+#   - 显示名：clean_model_display（去目录/去 .gguf，仅显示用，不动 current_model）→ 检索「def clean_model_display」
+#   - 默认参数：compute_defaults（显存+模型大小）/ apply_computed_defaults（后台线程计算）
+#     → 检索「def compute_defaults」
+#   - 预设：save_preset / del_preset / rename_preset / on_preset_load / refresh_preset_menu
+#     import_presets / export_presets / 孤儿预设 manage_orphan_presets / 批量 manage_presets_all
+#     → 检索「def save_preset」「def import_presets」「def manage_orphan_presets」
+#   - 参数读写：set_params（UI←参数）/ read_params（UI→参数）→ 检索「def set_params」「def read_params」
+#     加新参数必须在 set_params / read_params / build_cmd 三处同步（及 presets_template.json）
+#   - 命令组装与启停：build_cmd（llama-server 命令行，新 CLI 参数只在此加）
+#     start / stop / _read / _mark_stopped → 检索「def build_cmd」「def start」
+#   - 后台线程：_poll_q 队列分发（kind=params/gpus/hardware/error）→ 检索「def _poll_q」
+#   - 日志/服务信息：append_log / clear_log / update_svc_info / _set_svc_idle / _svc_*
+#   - 弹窗：open_settings / confirm_overwrite / _import_conflict_dialog / manage_* 等
+# ================================================================================
 import json, os, queue, socket, subprocess, sys, threading, traceback, webbrowser
 import tkinter as tk
 import tkinter.font as tkfont
@@ -46,7 +97,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.1.4'
+VERSION = '1.2.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -62,26 +113,65 @@ def _lan_ip():
     except Exception:
         return None
 
-# 简单字段：key / 标签 / 解释 / 可选选项
+# 简单字段：key / 标签 / 解释 / 可选选项（「（默认）」= 留空不传，用 llama 默认值）
 PARAMS = [
-    dict(k='ngl', t='GPU 层数', tip='卸载到 GPU 的层数。999=全部（最快最占显存）；0=纯 CPU（不占显存，可与其他 GPU 任务同时运行）。'),
-    dict(k='flash', t='Flash Attention', tip='闪存注意力。N 卡 20/30/40/50 系建议 on，加速且省显存。新版 llama 要带值 on/off/auto。', sel=['on', 'off', 'auto']),
-    dict(k='cache', t='KV 缓存精度', tip='KV Cache 精度。q8_0=8bit 量化显存减半、质量几乎无损（推荐）；fp16=高精度占显存；q4_0=更省但轻微下降。', sel=['q8_0', 'fp16', 'q4_0']),
-    dict(k='temp', t='温度 temp', tip='采样温度。越低越确定/保守（翻译 0.1~0.3），越高越随机。'),
-    dict(k='top_p', t='top-p', tip='核采样阈值。越低越保守，越高越多样。'),
-    dict(k='n_predict', t='最大输出', tip='单次请求最多生成的 token 数。翻译 4096 够；提示词转换 512 足够。'),
-    dict(k='port', t='端口', tip='llama-server 监听端口。与已运行的其他实例错开，避免端口冲突。'),
+    dict(k='ngl', t='GPU 层数', tip='卸载到 GPU 的层数。999=全部（最快最占显存）；0=纯 CPU（不占显存，可与其他 GPU 任务同时运行）；留空=用 llama 默认。'),
+    dict(k='flash', t='Flash Attention', tip='闪存注意力。N 卡 20/30/40/50 系建议 on，加速且省显存。新版 llama 要带值 on/off/auto。留空（默认）=不传该参数。', sel=['（默认）', 'on', 'off', 'auto']),
+    dict(k='cache', t='KV 缓存精度', tip='KV Cache 精度。q8_0=8bit 量化显存减半、质量几乎无损（推荐）；fp16=高精度占显存；q4_0=更省但轻微下降。留空（默认）=不传。', sel=['（默认）', 'q8_0', 'fp16', 'q4_0']),
+    dict(k='temp', t='温度 temp', tip='采样温度。越低越确定/保守（翻译 0.1~0.3），越高越随机。留空=用 llama 默认。'),
+    dict(k='top_p', t='top-p', tip='核采样阈值。越低越保守，越高越多样。留空=用 llama 默认。'),
+    dict(k='n_predict', t='最大输出', tip='单次请求最多生成的 token 数。翻译 4096 够；提示词转换 512 足够。留空=不限。'),
+    dict(k='port', t='端口', tip='llama-server 监听端口。留空=用 llama 默认 8080；与已运行的其他实例错开，避免端口冲突。'),
 ]
+
+
+def _strip_jsonc(text):
+    """去掉 // 和 /* */ 注释（字符串内保留原样）。支持预设模板 JSONC（带说明注释）。"""
+    out, i, n = [], 0, len(text)
+    in_str = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == '\\':
+                i += 1
+                if i < n:
+                    out.append(text[i])
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            out.append(c); i += 1; continue
+        if c == '/' and i + 1 < n and text[i + 1] == '/':
+            while i < n and text[i] != '\n':
+                i += 1
+            continue
+        if c == '/' and i + 1 < n and text[i + 1] == '*':
+            i += 2
+            while i + 1 < n and not (text[i] == '*' and text[i + 1] == '/'):
+                i += 1
+            i = min(i + 2, n)
+            continue
+        out.append(c); i += 1
+    return ''.join(out)
+
+
+def _load_jsonc(path):
+    """读取 JSON/JSONC 文件；解析失败返回 None。"""
+    try:
+        with open(path, encoding='utf-8') as f:
+            return json.loads(_strip_jsonc(f.read()))
+    except Exception:
+        return None
 
 
 def load_presets():
     if os.path.exists(PRESETS_FILE):
-        try:
-            d = json.load(open(PRESETS_FILE, encoding='utf-8'))
-            if isinstance(d, dict):
-                return d
-        except Exception:
-            pass
+        d = _load_jsonc(PRESETS_FILE)
+        if isinstance(d, dict):
+            return d
     return {}
 
 
@@ -113,6 +203,31 @@ def load_cfg():
 def save_cfg(c):
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(c, f, ensure_ascii=False, indent=2)
+
+
+def find_mmproj(model):
+    """在 models/ 里找匹配当前模型的多模态投影文件（文件名含 mmproj 的 .gguf）。找不到返回 None。"""
+    try:
+        files = os.listdir(MODELS_DIR)
+    except Exception:
+        return None
+    cands = [f for f in files if f.lower().endswith('.gguf') and 'mmproj' in f.lower()]
+    if not cands:
+        return None
+    stem = model[:-5] if model.lower().endswith('.gguf') else model
+    base = stem.split('-')[0].lower()
+    for c in cands:
+        if base and base in c.lower():
+            return os.path.join(MODELS_DIR, c)
+    return os.path.join(MODELS_DIR, cands[0])
+
+
+def clean_model_display(name):
+    """显示用模型名：去目录、去 .gguf 后缀（current_model 仍保留完整文件名作路径/预设键）。"""
+    n = os.path.basename(name or '')
+    if n.lower().endswith('.gguf'):
+        n = n[:-5]
+    return n
 
 
 def detect_gpus():
@@ -345,7 +460,7 @@ class App(ctk.CTk):
         ToolTip(lab, '同时处理的请求数。选完后按 上下文÷并行 自动算每个工作线程的上下文（并行=1 时不计算）。')
         row1 = ctk.CTkFrame(pf, fg_color='transparent')
         row1.grid(row=1, column=1, columnspan=3, sticky='ew', padx=(6, 14), pady=5)
-        self.parallel_sel = ctk.CTkOptionMenu(row1, values=PARALLEL_OPTS, width=80, command=lambda _: self.update_calc())
+        self.parallel_sel = ctk.CTkOptionMenu(row1, values=['（默认）'] + PARALLEL_OPTS, width=80, command=lambda _: self.update_calc())
         self.parallel_sel.pack(side='left')
         self.per_worker_lab = ctk.CTkLabel(row1, text='', text_color='#9fd6a5', width=220)
         self.per_worker_lab.pack(side='left', padx=(12, 0))
@@ -366,7 +481,7 @@ class App(ctk.CTk):
         ToolTip(lab, '127.0.0.1=仅本机访问；0.0.0.0=局域网可访问（配合防火墙）。')
         rowh = ctk.CTkFrame(pf, fg_color='transparent')
         rowh.grid(row=base, column=1, sticky='w', padx=(6, 14), pady=5)
-        self.host_sel = ctk.CTkOptionMenu(rowh, values=['127.0.0.1', '0.0.0.0'], width=130, command=lambda _: self.update_host_hint())
+        self.host_sel = ctk.CTkOptionMenu(rowh, values=['（默认）', '127.0.0.1', '0.0.0.0'], width=130, command=lambda _: self.update_host_hint())
         self.host_sel.pack(side='left')
         self.host_hint = ctk.CTkLabel(rowh, text='', text_color='#9fd6a5')
         self.host_hint.pack(side='left', padx=(8, 0))
@@ -390,17 +505,20 @@ class App(ctk.CTk):
         self.w_n_batch = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不传')
         self.w_n_batch.grid(row=base + 2, column=1, padx=(6, 14), pady=5, sticky='w')
 
-        # 可选参数：自定义 llama 路径
-        lab = ctk.CTkLabel(pf, text='llama 路径', anchor='w', width=110)
-        lab.grid(row=base + 3, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '可选。覆盖默认的 llama-server.exe 路径；留空用程序同目录下的 llama-server.exe。')
-        self.w_server_path = ctk.CTkEntry(pf, width=170, placeholder_text='留空=默认')
-        self.w_server_path.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
+        # 思考模式开关（预设参数，默认开；on→--reasoning on，off→--reasoning off；Murasaki/Qwen3/DeepSeek 等推理模型用）
+        self.think_chk = ctk.CTkCheckBox(pf, text='思考模式', command=self.on_thinking_toggle)
+        self.think_chk.grid(row=5, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(self.think_chk, '推理模型（Murasaki/Qwen3/DeepSeek 等）开=先思考再答，关=直出答案（--reasoning off）。默认开，存为预设参数；预设省略时按开处理。')
 
-        # Gemma 模型（可选勾选，替代仅按文件名判断；放在最大输出下面）
+        # 多模态开关（预设参数，默认关；勾选 → --mmproj <models/ 里的 mmproj 投影文件>，Qwen2.5-VL/LLaVA 等视觉模型用）
+        self.mm_chk = ctk.CTkCheckBox(pf, text='多模态', command=self.on_mm_toggle)
+        self.mm_chk.grid(row=6, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(self.mm_chk, '视觉/多模态模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 --mmproj，加载 models/ 目录里匹配的 mmproj 投影文件（自动匹配；找不到会在日志提示）。默认关，存为预设参数。')
+
+        # Gemma 模型（可选勾选，替代仅按文件名判断；在多模态下方一格）
         self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=5, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。默认按文件名自动判断，可手动勾选/取消覆盖；按模型记住。')
+        self.gemma_chk.grid(row=7, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。存为预设参数；预设未指定时按文件名自动判断（可在设置里按模型覆盖）。')
 
         self.bar = ctk.CTkFrame(self)
         self.bar.grid(row=2, column=0, sticky='ew', padx=12, pady=6)
@@ -448,8 +566,7 @@ class App(ctk.CTk):
                 mark()
             menu.configure(command=handler)
 
-        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel,
-                  self.w_n_batch, self.w_server_path]:
+        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch]:
             if isinstance(w, ctk.CTkEntry):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
@@ -483,6 +600,7 @@ class App(ctk.CTk):
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
         # 有可用预设 → 优先用预设（上次选的 >「默认」> 第一个），都不动自动计算
+        # （gemma/思考模式 均随预设加载，由 set_params 设置）
         ps = self.presets.get(m, {})
         if isinstance(ps, dict) and ps:
             last = self.cfg.get('last_preset', {}).get(m)
@@ -526,6 +644,14 @@ class App(ctk.CTk):
         self._preset_locked = False   # 用户主动切换 → 重新按 gemma 计算
         self.apply_computed_defaults()   # gemma 会影响温度/输出长度
 
+    def on_thinking_toggle(self):
+        checked = bool(self.think_chk.get())
+        self.append_log(f'>>> 思考模式：{"开" if checked else "关"}（存为预设时随预设一起保存）')
+
+    def on_mm_toggle(self):
+        checked = bool(self.mm_chk.get())
+        self.append_log(f'>>> 多模态：{"开" if checked else "关"}（存为预设时随预设一起保存）')
+
     def get_category(self, model):
         return self.cfg.get('categories', {}).get(model, '未指定')
 
@@ -561,7 +687,8 @@ class App(ctk.CTk):
         return {'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
                 'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
                 'parallel': 1, 'port': 4000, 'host': '127.0.0.1',
-                'gpu': '自动', 'n_batch': '', 'server_path': ''}
+                'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
+                'mm': False}
 
     def _poll_q(self):
         # 主线程轮询工作线程结果（tkinter 的 after 不能从子线程调）
@@ -688,53 +815,85 @@ class App(ctk.CTk):
     def set_params(self, p):
         if not p:
             return
-        if p.get('ctx'):
-            self.ctx_input.delete(0, 'end'); self.ctx_input.insert(0, str(p['ctx']))
-        if p.get('parallel'):
-            self.parallel_sel.set(str(p['parallel']))
-        if p.get('host'):
-            self.host_sel.set(str(p['host']))
-        if p.get('gpu'):
-            if str(p['gpu']) not in self.gpu_sel.cget('values'):
+
+        def set_entry(w, v):
+            w.delete(0, 'end')
+            if v not in (None, ''):
+                w.insert(0, str(v))
+
+        def set_menu(w, v):
+            vals = w.cget('values') or []
+            if v in (None, '', '（默认）'):
+                w.set('（默认）' if '（默认）' in vals else (vals[0] if vals else ''))
+            elif str(v) in vals:
+                w.set(str(v))
+
+        set_entry(self.ctx_input, p.get('ctx'))
+        set_menu(self.parallel_sel, p.get('parallel'))
+        set_menu(self.host_sel, p.get('host'))
+        gv = p.get('gpu')
+        if gv in (None, '', '自动'):
+            self.gpu_sel.set('自动')
+        else:
+            if str(gv) not in self.gpu_sel.cget('values'):
                 self.gpu_sel.configure(values=['自动'] + (self.gpu_sel.cget('values') or []))
-            self.gpu_sel.set(str(p['gpu']))
+            self.gpu_sel.set(str(gv))
         for pp in PARAMS:
             w = getattr(self, 'w_' + pp['k'], None)
             v = p.get(pp['k'])
-            if w is None or v is None:
+            if w is None:
                 continue
             if isinstance(w, ctk.CTkOptionMenu):
-                if str(v) in w.cget('values'):
-                    w.set(str(v))
+                set_menu(w, v)
             else:
-                w.delete(0, 'end'); w.insert(0, str(v))
-        self.w_n_batch.delete(0, 'end'); self.w_n_batch.insert(0, str(p.get('n_batch') or ''))
-        self.w_server_path.delete(0, 'end'); self.w_server_path.insert(0, str(p.get('server_path') or ''))
+                set_entry(w, v)
+        set_entry(self.w_n_batch, p.get('n_batch'))
+        if p.get('thinking', True):
+            self.think_chk.select()
+        else:
+            self.think_chk.deselect()
+        gemma = p.get('gemma')
+        if gemma is None:
+            gemma = self.is_gemma(self.current_model or '')
+        self.gemma_chk.select() if gemma else self.gemma_chk.deselect()
+        self.mm_chk.select() if p.get('mm') else self.mm_chk.deselect()
         self.update_calc()
         self.update_host_hint()
         self.sync_ctx_preset()
 
     def read_params(self):
-        def num(k, v):
+        def intv(k, v):
+            if v in ('', '（默认）'):
+                return ''
             try:
                 return int(v)
             except (ValueError, TypeError):
                 raise ValueError(f'{k} 需要整数，当前值：{v!r}')
 
+        def fltv(k, v):
+            if v in ('', '（默认）'):
+                return ''
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                raise ValueError(f'{k} 需要数字，当前值：{v!r}')
+
         p = {
-            'ctx': num('ctx', self.ctx_input.get()),
-            'parallel': num('parallel', self.parallel_sel.get()),
-            'port': num('port', self.w_port.get()),
-            'ngl': num('ngl', self.w_ngl.get()),
-            'n_predict': num('n_predict', self.w_n_predict.get()),
-            'flash': self.w_flash.get(),
-            'cache': self.w_cache.get(),
-            'host': self.host_sel.get(),
+            'ctx': intv('上下文长度', self.ctx_input.get().strip()),
+            'parallel': intv('并行请求', self.parallel_sel.get()),
+            'port': intv('端口', self.w_port.get().strip()),
+            'ngl': intv('GPU 层数', self.w_ngl.get().strip()),
+            'n_predict': intv('最大输出', self.w_n_predict.get().strip()),
+            'flash': '' if self.w_flash.get() == '（默认）' else self.w_flash.get(),
+            'cache': '' if self.w_cache.get() == '（默认）' else self.w_cache.get(),
+            'host': '' if self.host_sel.get() == '（默认）' else self.host_sel.get(),
             'gpu': self.gpu_sel.get(),
-            'temp': float(self.w_temp.get()),
-            'top_p': float(self.w_top_p.get()),
+            'temp': fltv('温度', self.w_temp.get().strip()),
+            'top_p': fltv('top-p', self.w_top_p.get().strip()),
             'n_batch': self.w_n_batch.get().strip(),
-            'server_path': self.w_server_path.get().strip(),
+            'thinking': bool(self.think_chk.get()),
+            'gemma': bool(self.gemma_chk.get()),
+            'mm': bool(self.mm_chk.get()),
         }
         return p
 
@@ -770,7 +929,8 @@ class App(ctk.CTk):
             self.per_worker_lab.configure(text=f'每线程上下文 ≈ {ctx // par}')
 
     def update_host_hint(self):
-        self.host_hint.configure(text='[本机]' if self.host_sel.get() == '127.0.0.1' else '[局域网]')
+        h = self.host_sel.get()
+        self.host_hint.configure(text='[本机]' if h in ('127.0.0.1', '（默认）') else '[局域网]')
 
     def refresh_gpus(self):
         # 从缓存读显卡列表（首次由 _startup_hardware 检测并写入）
@@ -930,10 +1090,9 @@ class App(ctk.CTk):
                                           defaultextension='.json', filetypes=[('JSON', '*.json')])
         if not path:
             return
-        try:
-            imported = json.load(open(path, encoding='utf-8'))
-        except Exception as e:
-            messagebox.showerror('导入预设', f'读取文件失败：{e}')
+        imported = _load_jsonc(path)
+        if imported is None:
+            messagebox.showerror('导入预设', '读取文件失败（不是合法 JSON/JSONC）')
             return
         if not isinstance(imported, dict):
             messagebox.showerror('导入预设', '文件格式不对，应为 {模型: {预设名: 参数}}')
@@ -1107,7 +1266,7 @@ class App(ctk.CTk):
         dlg = ctk.CTkToplevel(self)
         self._apply_icon(dlg)
         dlg.title('设置')
-        dlg.geometry('420x560')
+        dlg.geometry('460x680')
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
@@ -1122,9 +1281,31 @@ class App(ctk.CTk):
             sizebox.select()
         sizebox.pack(pady=6, padx=24, anchor='w')
 
+        # llama-server 路径（全局，不在预设里）
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        ctk.CTkLabel(dlg, text='llama-server.exe 路径（全局，留空=程序同目录）',
+                     anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
+        spf = ctk.CTkFrame(dlg, fg_color='transparent')
+        spf.pack(padx=24, pady=(0, 6), fill='x')
+        sp_entry = ctk.CTkEntry(spf, placeholder_text='留空=程序同目录 llama-server.exe')
+        sp_entry.pack(side='left', fill='x', expand=True)
+        sp_entry.insert(0, self.cfg.get('server_path', ''))
+
+        def browse_sp():
+            cur = sp_entry.get().strip()
+            init = os.path.dirname(cur) if cur and os.path.isabs(cur) else BASE
+            p = filedialog.askopenfilename(parent=dlg, title='选择 llama-server.exe',
+                                           initialdir=init, filetypes=[('llama-server', 'llama-server.exe'), ('可执行文件', '*.exe')])
+            if p:
+                sp_entry.delete(0, 'end')
+                sp_entry.insert(0, p)
+
+        ctk.CTkButton(spf, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
+
         def save():
             self.cfg['overwrite_ask'] = bool(ask.get())
             self.cfg['remember_size'] = bool(sizebox.get())
+            self.cfg['server_path'] = sp_entry.get().strip()
             save_cfg(self.cfg)
             dlg.destroy()
 
@@ -1162,8 +1343,8 @@ class App(ctk.CTk):
         self.log_box.configure(state='disabled')
 
     def update_svc_info(self, model, p):
-        host = p.get('host', '127.0.0.1')
-        port = p['port']
+        host = p.get('host') or '127.0.0.1'
+        port = p.get('port') or 8080
         if host == '0.0.0.0':
             hosts = ['127.0.0.1']
             ip = _lan_ip()
@@ -1178,7 +1359,7 @@ class App(ctk.CTk):
         base = ' · '.join(f'http://{h}:{port}{tag(h)}' for h in hosts)
         urls = ' · '.join(f'http://{h}:{port}{s}' for h in hosts for s in API_SUFFIXES)
         self.svc_info.delete('1.0', 'end')
-        self.svc_info.insert('1.0', f'模型：{model}\nAPI：{base}\n{urls}')
+        self.svc_info.insert('1.0', f'模型：{clean_model_display(model)}\nAPI：{base}\n{urls}')
         self.svc_info.tag_configure('body', foreground='#7fd9a0')
         self.svc_info.tag_add('body', '1.0', 'end')
         self._svc_sync_height()
@@ -1214,18 +1395,50 @@ class App(ctk.CTk):
             pass
 
     def build_cmd(self, model, p):
-        exe = p.get('server_path') or SERVER_EXE
+        exe = self.cfg.get('server_path') or SERVER_EXE
+
+        def val(v):
+            return v is not None and v != ''
+
         args = [exe, '-m', os.path.join(MODELS_DIR, model),
-                '-ngl', str(p['ngl']), '-c', str(p['ctx']), '--flash-attn', p['flash'],
-                '-ctk', p['cache'], '-ctv', p['cache'], '-n', str(p['n_predict']),
-                '--parallel', str(p['parallel']), '--temp', str(p['temp']), '--top-p', str(p['top_p']),
-                '--host', p['host'], '--port', str(p['port'])]
-        if p.get('gpu') and p['gpu'] != '自动' and p['gpu']:
-            args += ['--main-gpu', p['gpu'].split(',')[0].strip()]
-        if p.get('n_batch'):
-            args += ['--batch-size', p['n_batch']]
-        if self.is_gemma(model) and os.path.exists(JINJA):
+                '--alias', clean_model_display(model)]   # API 上报用干净模型名（无目录/无 .gguf）
+        if val(p.get('ngl')):
+            args += ['-ngl', str(p['ngl'])]
+        if val(p.get('ctx')):
+            args += ['-c', str(p['ctx'])]
+        if val(p.get('flash')):
+            args += ['--flash-attn', str(p['flash'])]
+        if val(p.get('cache')):
+            args += ['-ctk', str(p['cache']), '-ctv', str(p['cache'])]
+        if val(p.get('n_predict')):
+            args += ['-n', str(p['n_predict'])]
+        if val(p.get('parallel')):
+            args += ['--parallel', str(p['parallel'])]
+        if val(p.get('temp')):
+            args += ['--temp', str(p['temp'])]
+        if val(p.get('top_p')):
+            args += ['--top-p', str(p['top_p'])]
+        if val(p.get('host')):
+            args += ['--host', str(p['host'])]
+        if val(p.get('port')):
+            args += ['--port', str(p['port'])]
+        gpu = p.get('gpu')
+        if val(gpu) and gpu != '自动':
+            args += ['--main-gpu', gpu.split(',')[0].strip()]
+        if val(p.get('n_batch')):
+            args += ['--batch-size', str(p['n_batch'])]
+        args += ['--reasoning', 'on' if p.get('thinking', True) else 'off']
+        gemma = p.get('gemma')
+        if gemma is None:
+            gemma = self.is_gemma(model)
+        if gemma and os.path.exists(JINJA):
             args += ['--chat-template-file', JINJA]
+        if p.get('mm'):
+            mm = find_mmproj(model)
+            if mm:
+                args += ['--mmproj', mm]
+            else:
+                self.append_log('!!! 多模态已勾选，但 models/ 里没找到 mmproj 投影文件，未加 --mmproj')
         return args
 
     def start(self):
@@ -1247,7 +1460,7 @@ class App(ctk.CTk):
                                          creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         except Exception as e:
             self.append_log('!!! 启动失败: ' + str(e)); return
-        self.status_lab.configure(text=f'● 运行中 · {self.current_model} · :{p["port"]}', text_color='#7fd9a0')
+        self.status_lab.configure(text=f'● 运行中 · {clean_model_display(self.current_model)} · :{p.get("port") or 8080}', text_color='#7fd9a0')
         self.update_svc_info(self.current_model, p)
         threading.Thread(target=self._read, daemon=True).start()
 
@@ -1297,8 +1510,11 @@ class App(ctk.CTk):
 
 def main():
     try:
-        if not os.path.exists(SERVER_EXE):
-            messagebox.showerror('LLM GUI', '未找到 llama-server.exe\n请把它放到：\n' + BASE)
+        cfg = load_cfg()
+        exe = cfg.get('server_path') or SERVER_EXE
+        if not os.path.exists(exe):
+            messagebox.showerror('LLM GUI',
+                                 '未找到 llama-server.exe\n请在「设置」里选择 llama 路径，或把它放到程序同目录：\n' + BASE)
             return
         App().mainloop()
     except Exception:

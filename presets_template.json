@@ -1,0 +1,50 @@
+{
+  // ==================== LLM GUI 预设模板 ====================
+  // 文件格式：{ 模型文件名: { 预设名: { 参数... } } }
+  // 与 llm_presets.json 完全同构，带注释可直接用（JSONC）。
+  // 用法：复制本文件改名 llm_presets.json（或从「设置 → 导入预设」合并），
+  //       把「模型文件示例.gguf」改成 models/ 里的真实文件名即可。
+  //
+  // 【留空规则】所有参数都可留空或删除：空字符串 = 不传给 llama-server，
+  //            用 llama 自身默认值。下方注释里标注了各参数留空时的默认行为。
+  // 【保存】在界面调好参数点「存为预设」会自动写入完整参数（含 thinking/gemma）。
+  "模型文件示例.gguf": {
+    "示例预设": {
+      // 上下文长度（token）。留空 = 用 llama 默认
+      "ctx": 32768,
+      // 并行请求数（--parallel）。留空 = 用 llama 默认 1
+      "parallel": 1,
+      // 卸载到 GPU 的层数（-ngl）。999=全部，0=纯 CPU。留空 = 用 llama 默认
+      "ngl": 999,
+      // Flash Attention（--flash-attn）：on / off / auto。留空 = 不传
+      "flash": "on",
+      // KV 缓存精度（-ctk / -ctv）：q8_0 / fp16 / q4_0。留空 = 不传
+      "cache": "q8_0",
+      // 采样温度（--temp）。留空 = 用 llama 默认
+      "temp": 0.6,
+      // top-p 核采样（--top-p）。留空 = 用 llama 默认
+      "top_p": 0.9,
+      // 最大输出 token 数（-n）。留空 = 不限（llama 默认）
+      "n_predict": 2048,
+      // 监听端口（--port）。留空 = 用 llama 默认 8080
+      "port": 4000,
+      // 监听地址（--host）：127.0.0.1=仅本机 / 0.0.0.0=局域网。留空 = 不传（llama 默认 127.0.0.1）
+      "host": "127.0.0.1",
+      // 显卡（--main-gpu）。「自动」= 不传该参数，由 llama 自行选择
+      "gpu": "自动",
+      // 批处理大小（--batch-size）。留空 = 不传
+      "n_batch": "",
+      // 思考模式（--reasoning on/off）：true=推理模型先思考再答，false=直出答案。
+      // 留空/缺省 = 开。Murasaki / Qwen3 / DeepSeek 等推理模型用
+      "thinking": true,
+      // 多模态：true=带 --mmproj，自动加载 models/ 里匹配的 mmproj 投影文件。
+      // Qwen2.5-VL / LLaVA / MiniCPM-V 等视觉模型用。缺省 = 关
+      "mm": false,
+      // Gemma 模型：true=带 --chat-template-file（需同目录 gemma_chat_template.jinja）。
+      // 缺省 = 按文件名自动判断（含 gemma 的模型自动开）
+      "gemma": false
+    }
+  }
+  // 更多模型只需照着再加一个顶层键：
+  // "另一个模型.gguf": { "预设名": { "ctx": 16384, "temp": 0.2 } }
+}
