@@ -11,7 +11,8 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - Custom context length + presets (4K ~ 64K); parallel requests auto-compute per-worker context
 - Model category (chat / translation / roleplay / creative writing…) → auto-computes defaults from VRAM + model size
 - Thinking mode toggle: reasoning models (Murasaki / Qwen3 / DeepSeek…) can turn thinking output on/off (`--reasoning on/off`), default on, saved as a preset parameter
-- Multimodal toggle: vision models (Qwen2.5-VL / LLaVA / MiniCPM-V…) launch with `--mmproj`, auto-matching the mmproj projector file in `models/`
+- Reasoning budget: limits how many tokens reasoning models spend in the "thinking" phase (`--reasoning-budget`), blank = unlimited
+- Multimodal toggle: vision models (Qwen2.5-VL / LLaVA / MiniCPM-V…) launch with `--mmproj`, auto-matching the mmproj projector file in `models/` by filename (picks the best when several), or you can pin one manually via the "投影文件" dropdown (remembered per model); mmproj files are not listed as selectable models
 - Gemma model option: uses the dedicated chat template and suggests a low temperature (a preset parameter; falls back to filename detection when omitted)
 - All parameters can be left empty: empty fields are not passed to llama-server, which then uses its own defaults
 - llama-server.exe path is a global setting (choose it in Settings; leave empty for same-folder)
@@ -37,7 +38,8 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - **Auto-compute**: pick a "模型定位" (category) then click "⚙ 计算默认"; the program computes `ctx / ngl / temp…` from your VRAM and model size (results stored locally in `llm_default_presets.json`, machine-specific, not committed)
 - **Gemma**: check the "Gemma 模型" box in the parameters area to launch with `--chat-template-file` and low-temperature auto-compute; saved as a preset parameter, falls back to filename detection when omitted
 - **Thinking mode**: the "思考模式" checkbox in the parameters area defaults to on → launch with `--reasoning on` (reasoning models think first, e.g. Murasaki's chain-of-thought / Qwen3); uncheck → `--reasoning off` (direct answer). Saved as a preset parameter (treated as on when omitted)
-- **Multimodal**: check the "多模态" box → launch with `--mmproj`, auto-matching the mmproj projector file in `models/` (logs a warning when none is found); saved as a preset parameter, default off
+- **Reasoning budget**: the "推理预算" field under "思考模式" limits how many tokens the model spends thinking (`--reasoning-budget`). `-1`=unlimited / `0`=end thinking immediately / positive=budget; blank = not passed (llama default -1 = unlimited)
+- **Multimodal**: check the "多模态" box → launch with `--mmproj`. The projector defaults to "（自动）" auto-match by filename (a single one is used directly; several → best match; none matches → warning in the log), or pick a specific file in the "投影文件" dropdown (remembered per model, takes priority over auto). Saved as a preset parameter, default off. mmproj files are not listed as selectable models
 - **llama path**: defaults to `llama-server.exe` next to the program; a different path can be set globally in Settings (not part of presets)
 - **API address**: after startup, the model name and `http://127.0.0.1:<port>` endpoints are shown persistently above the log
 
@@ -63,6 +65,12 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.4.0 (2026-08-15) New + fix + polish:
+  - New: "推理预算" parameter (`--reasoning-budget`) — limits tokens reasoning models spend thinking; sits right under the thinking-mode toggle; blank = unlimited
+  - New: "投影文件" dropdown in the parameters area — manually pin the projector file for the current model (handles generic names like `mmproj-F16.gguf`), remembered per model, takes priority over auto-matching
+  - Polish: the parameter area's second column now aligns with the left column — Flash Attention shares a row with context length; right-side params/checkboxes line up row by row
+  - Fix: `mmproj-*` projector files are no longer treated as standalone models (dropped from the model dropdown / model list)
+  - Fix: when several multimodal models are mixed, each model auto-matches its own mmproj by filename-token overlap (a single file is used directly; if none matches, warn in the log instead of attaching the wrong projector)
 - v1.3.0 (2026-08-14) New + fix:
   - New: Settings → "📦 Model list" — a popup window listing every model in `models/` with its size and a total-usage footer
   - Fix: a long model name in the running status pushed the Settings button off the right edge (status text now truncates the model name)

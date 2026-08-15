@@ -20,7 +20,7 @@
 #   - 路径：MODELS_DIR / PRESETS_FILE / CONFIG_FILE / DEFAULTS_FILE / SERVER_EXE / JINJA
 #     → 检索「MODELS_DIR =」
 #   - CTX_PRESETS（上下文档 4K~64K）/ PARALLEL_OPTS（并发档）→ 检索「CTX_PRESETS =」
-#   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port）。UI 按此表自动排两列。
+#   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port）。UI 按此表自动排两列（左列 row2 起、右列 row0 起）；推理预算为独立字段（row4,col2）
 #     → 检索「PARAMS =」；加新简单参数只需在此表加一条，UI 行号自动推
 #   - GEMMA_JINJA_TEMPLATE / VERSION / GITHUB_* → 检索「GEMMA_JINJA_TEMPLATE =」「VERSION =」
 #
@@ -38,16 +38,16 @@
 # 四、App 类（主窗口，方法按功能分组）
 #   - 初始化/生命周期：__init__ / _build_ui（全部 UI 在此构建）/ on_close → 检索「def _build_ui」
 #   - 参数区网格行号表（CTkScrollableFrame；改布局先看这）：
-#       row0 上下文长度 | row1 并行请求
-#       row2 GPU层数(col0) / Flash(col2) | row3 KV缓存 / 温度 | row4 top-p / 最大输出
-#       row5 port / 思考模式 | row6 监听地址(col0-1) / 多模态(col2)
-#       row7 显卡(col0) / Gemma(col2) | row8 批处理大小（llama 路径已移到「设置」全局项）
-#     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 行由表长自动推；
-#     思考模式(row5,2)、多模态(row6,2)、Gemma(row7,2) 为硬编码，增删 PARAMS 项后须手动检查这三行
+#       row0 上下文长度(col0) / Flash(col2) | row1 并行请求 / 温度(col2)
+#       row2 GPU层数(col0) / 最大输出(col2) | row3 KV缓存 / 思考模式(col2)
+#       row4 top-p(col0) / 推理预算(col2) | row5 端口(col0) / 多模态+投影文件(col2)
+#       row6 监听地址(col0) / Gemma(col2) | row7 显卡(col0) | row8 批处理大小(col0)
+#     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 左列 row2 起、右列 row0 起（右列与左列顶部对齐）；
+#     思考模式(row3,2)、推理预算(row4,2)、多模态+投影文件(row5,2)、Gemma(row6,2) 为硬编码，增删 PARAMS 项后须手动检查
 #   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
 #     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
 #     思考模式/多模态 thinking/mm 已是预设参数（thinking 默认开、mm 默认关）
-#   - 多模态投影：find_mmproj（models/ 里按文件名匹配 mmproj 投影文件）→ 检索「def find_mmproj」
+#   - 多模态投影：find_mmproj（models/ 里按文件名 token 匹配 mmproj 投影文件；单个直接用、多个选最像的、都不像返回 None）；参数区「投影文件」下拉可手动指定（按模型存 cfg['mmproj']，优先于自动匹配）→ 检索「def find_mmproj」「def refresh_mmproj_menu」
 #   - 显示名：clean_model_display（去目录/去 .gguf，仅显示用，不动 current_model）→ 检索「def clean_model_display」
 #   - 默认参数：compute_defaults（显存+模型大小）/ apply_computed_defaults（后台线程计算）
 #     → 检索「def compute_defaults」
@@ -62,7 +62,7 @@
 #   - 日志/服务信息：append_log / clear_log / update_svc_info / _set_svc_idle / _svc_*
 #   - 弹窗：open_settings / confirm_overwrite / _import_conflict_dialog / manage_* 等
 # ================================================================================
-import json, os, queue, socket, subprocess, sys, threading, traceback, webbrowser
+import json, os, queue, re, socket, subprocess, sys, threading, traceback, webbrowser
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
@@ -97,7 +97,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -205,21 +205,60 @@ def save_cfg(c):
         json.dump(c, f, ensure_ascii=False, indent=2)
 
 
+# mmproj 文件名里的量化/精度后缀 token，不参与身份匹配（否则短数字会误匹配进 f16/q8_0 等）
+_MMPROJ_NOISE = {'f16', 'f32', 'bf16', 'fp16', 'gguf', 'i8',
+                 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'q6_k', 'q5_k', 'q4_k', 'q3_k', 'q2_k'}
+
+
+def _mmproj_tokens(name):
+    """mmproj 匹配用规范化 token：小写、去目录/.gguf/去 mmproj- 前缀、按非字母数字切分、去量化后缀。"""
+    n = os.path.basename(name or '').lower()
+    if n.endswith('.gguf'):
+        n = n[:-5]
+    if n.startswith('mmproj-'):
+        n = n[len('mmproj-'):]
+    n = re.sub(r'[^a-z0-9]+', ' ', n)
+    return [t for t in n.split(' ') if t and t not in _MMPROJ_NOISE]
+
+
+def _is_size_token(t):
+    """尺寸类 token（7b/13b/2b 或纯数字），系列内区分不同尺寸的关键。"""
+    return (len(t) >= 2 and t.endswith('b') and t[:-1].isdigit()) or t.isdigit()
+
+
 def find_mmproj(model):
-    """在 models/ 里找匹配当前模型的多模态投影文件（文件名含 mmproj 的 .gguf）。找不到返回 None。"""
+    """在 models/ 里找与当前模型匹配的多模态投影文件（文件名含 mmproj 的 .gguf）。
+    - 只有一个 mmproj → 直接用（无从混淆，mmproj-F16 这类通用名也能配）
+    - 多个 → 按文件名 token 重叠度选最像的（尺寸 token 加权），至少命中 2 个才算匹配，否则 None（启动时提示）
+    拿不准时可在参数区「投影文件」手动指定（按模型记忆，优先于自动匹配）。
+    含 mmproj 的文件不作为可选模型（见 models_list）。"""
     try:
         files = os.listdir(MODELS_DIR)
     except Exception:
         return None
-    cands = [f for f in files if f.lower().endswith('.gguf') and 'mmproj' in f.lower()]
+    cands = sorted(f for f in files if f.lower().endswith('.gguf') and 'mmproj' in f.lower())
     if not cands:
         return None
-    stem = model[:-5] if model.lower().endswith('.gguf') else model
-    base = stem.split('-')[0].lower()
+    if len(cands) == 1:
+        return os.path.join(MODELS_DIR, cands[0])
+
+    mt = _mmproj_tokens(model)
+    if not mt:
+        return None
+    best = None   # (文件名, 命中模型 token 数, 加权分)
     for c in cands:
-        if base and base in c.lower():
-            return os.path.join(MODELS_DIR, c)
-    return os.path.join(MODELS_DIR, cands[0])
+        ct = _mmproj_tokens(c)
+        matched = [t for t in mt if any(t in u for u in ct)]
+        n = len(matched)
+        if n == 0:
+            continue
+        score = sum(2 if _is_size_token(t) else 1 for t in matched)
+        if best is None or n > best[1] or (n == best[1] and score > best[2]):
+            best = (c, n, score)
+    # 多个候选：至少命中 2 个模型 token 才算匹配，否则宁可提示，避免挂错 mmproj
+    if best and best[1] >= 2:
+        return os.path.join(MODELS_DIR, best[0])
+    return None
 
 
 def clean_model_display(name):
@@ -447,7 +486,7 @@ class App(ctk.CTk):
         lab.grid(row=0, column=0, padx=(14, 6), pady=5, sticky='w')
         ToolTip(lab, '提示词上下文长度（token）。越长一次能处理越多文本，越占显存。右侧下拉可一键选预设（按最低 4G 显存起步）。')
         row0 = ctk.CTkFrame(pf, fg_color='transparent')
-        row0.grid(row=0, column=1, columnspan=3, sticky='ew', padx=(6, 14), pady=5)
+        row0.grid(row=0, column=1, sticky='ew', padx=(6, 14), pady=5)
         self.ctx_input = ctk.CTkEntry(row0, width=120)
         self.ctx_input.pack(side='left')
         self.ctx_input.bind('<KeyRelease>', lambda _: self.sync_ctx_preset())
@@ -459,20 +498,27 @@ class App(ctk.CTk):
         lab.grid(row=1, column=0, padx=(14, 6), pady=5, sticky='w')
         ToolTip(lab, '同时处理的请求数。选完后按 上下文÷并行 自动算每个工作线程的上下文（并行=1 时不计算）。')
         row1 = ctk.CTkFrame(pf, fg_color='transparent')
-        row1.grid(row=1, column=1, columnspan=3, sticky='ew', padx=(6, 14), pady=5)
+        row1.grid(row=1, column=1, sticky='ew', padx=(6, 14), pady=5)
         self.parallel_sel = ctk.CTkOptionMenu(row1, values=['（默认）'] + PARALLEL_OPTS, width=80, command=lambda _: self.update_calc())
         self.parallel_sel.pack(side='left')
         self.per_worker_lab = ctk.CTkLabel(row1, text='', text_color='#9fd6a5', width=220)
         self.per_worker_lab.pack(side='left', padx=(12, 0))
 
-        # 其余简单字段两列排
+        # 其余简单字段两列排：左列 row2 起、右列 row0 起（右列与左列顶部对齐，Flash 与上下文长度同行）
         simple = PARAMS
         r = 2
         for i, pp in enumerate(simple):
-            row, col = r + i // 2, (i % 2) * 2
+            if i % 2:
+                row, col = i // 2, 2
+            else:
+                row, col = r + i // 2, 0
             w = ctk.CTkOptionMenu(pf, values=pp['sel'], width=170) if pp.get('sel') else ctk.CTkEntry(pf, width=170)
             add_pair(row, col, pp['t'], pp['tip'], w)
             setattr(self, 'w_' + pp['k'], w)
+
+        # 推理预算（--reasoning-budget）：思考 token 上限，配思考模式用（Murasaki/Qwen3/DeepSeek 等推理模型）
+        self.w_reasoning_budget = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不限')
+        add_pair(4, 2, '推理预算', '推理模型在「思考」阶段最多花费的 token（--reasoning-budget）。-1=不限，0=立即结束思考，N=预算。留空=不传（llama 默认 -1 不限）。', self.w_reasoning_budget)
 
         # 监听地址 + 提示
         base = r + (len(simple) + 1) // 2
@@ -507,17 +553,27 @@ class App(ctk.CTk):
 
         # 思考模式开关（预设参数，默认开；on→--reasoning on，off→--reasoning off；Murasaki/Qwen3/DeepSeek 等推理模型用）
         self.think_chk = ctk.CTkCheckBox(pf, text='思考模式', command=self.on_thinking_toggle)
-        self.think_chk.grid(row=5, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        self.think_chk.grid(row=3, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
         ToolTip(self.think_chk, '推理模型（Murasaki/Qwen3/DeepSeek 等）开=先思考再答，关=直出答案（--reasoning off）。默认开，存为预设参数；预设省略时按开处理。')
 
-        # 多模态开关（预设参数，默认关；勾选 → --mmproj <models/ 里的 mmproj 投影文件>，Qwen2.5-VL/LLaVA 等视觉模型用）
-        self.mm_chk = ctk.CTkCheckBox(pf, text='多模态', command=self.on_mm_toggle)
-        self.mm_chk.grid(row=6, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.mm_chk, '视觉/多模态模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 --mmproj，加载 models/ 目录里匹配的 mmproj 投影文件（自动匹配；找不到会在日志提示）。默认关，存为预设参数。')
+        # 多模态 + 投影文件（同一行，跨两列宽度；文件名提示吃满剩余宽度，长名也尽量显示完整）
+        rowmm = ctk.CTkFrame(pf, fg_color='transparent')
+        rowmm.grid(row=5, column=2, columnspan=2, sticky='ew', padx=(14, 14), pady=5)
+        rowmm.grid_columnconfigure(2, weight=1)
+        self.mm_chk = ctk.CTkCheckBox(rowmm, text='多模态', command=self.on_mm_toggle)
+        self.mm_chk.grid(row=0, column=0, sticky='w')
+        ToolTip(self.mm_chk, '视觉/多模态模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 --mmproj，自动在 models/ 里按文件名匹配投影文件（也可用旁边下拉手动指定）。默认关，存为预设参数。')
+        self.mmproj_sel = ctk.CTkOptionMenu(rowmm, values=['（自动）'], width=100, command=lambda _: self.on_mmproj_pick())
+        self.mmproj_sel.grid(row=0, column=1, sticky='w', padx=(8, 0))
+        ToolTip(self.mmproj_sel, '当前模型用的多模态投影文件（--mmproj）。「（自动）」= 按文件名自动匹配（右侧小字显示自动选中谁）；选具体文件 = 手动指定，按模型记住。自动匹配不到时启动会在日志提示。')
+        self.mmproj_hint = tk.Label(rowmm, text='', fg='#9fd6a5', bg='#2b2b2b',
+                                    font=('Microsoft YaHei', 9), anchor='w')
+        self.mmproj_hint.grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        self._mmproj_hint_tt = ToolTip(self.mmproj_hint, '')
 
         # Gemma 模型（可选勾选，替代仅按文件名判断；在多模态下方一格）
         self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=7, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        self.gemma_chk.grid(row=6, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
         ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。存为预设参数；预设未指定时按文件名自动判断（可在设置里按模型覆盖）。')
 
         self.bar = ctk.CTkFrame(self)
@@ -565,7 +621,8 @@ class App(ctk.CTk):
                 mark()
             menu.configure(command=handler)
 
-        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch]:
+        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch,
+                  self.w_reasoning_budget, self.mmproj_sel]:
             if isinstance(w, ctk.CTkEntry):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
@@ -579,7 +636,9 @@ class App(ctk.CTk):
 
     # ---------- 数据 ----------
     def models_list(self):
-        return sorted(f for f in os.listdir(MODELS_DIR) if f.lower().endswith('.gguf')) if os.path.isdir(MODELS_DIR) else []
+        # mmproj 是多模态投影辅助文件，不作为可选模型
+        return sorted(f for f in os.listdir(MODELS_DIR)
+                      if f.lower().endswith('.gguf') and 'mmproj' not in f.lower()) if os.path.isdir(MODELS_DIR) else []
 
     def load_models(self):
         ms = self.models_list()
@@ -598,6 +657,7 @@ class App(ctk.CTk):
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
         self.gemma_chk.select() if self.is_gemma(m) else self.gemma_chk.deselect()
+        self.refresh_mmproj_menu()
         # 有可用预设 → 优先用预设（上次选的 >「默认」> 第一个），都不动自动计算
         # （gemma/思考模式 均随预设加载，由 set_params 设置）
         ps = self.presets.get(m, {})
@@ -650,6 +710,52 @@ class App(ctk.CTk):
     def on_mm_toggle(self):
         checked = bool(self.mm_chk.get())
         self.append_log(f'>>> 多模态：{"开" if checked else "关"}（存为预设时随预设一起保存）')
+
+    def refresh_mmproj_menu(self):
+        """重建「投影文件」下拉（含 models/ 里全部 mmproj 文件）并恢复当前模型记忆的选择。"""
+        files = []
+        if os.path.isdir(MODELS_DIR):
+            files = sorted(f for f in os.listdir(MODELS_DIR)
+                           if f.lower().endswith('.gguf') and 'mmproj' in f.lower())
+        vals = ['（自动）'] + files
+        self.mmproj_sel.configure(values=vals)
+        saved = self.cfg.get('mmproj', {}).get(self.current_model or '', '（自动）')
+        self.mmproj_sel.set(saved if saved in vals else '（自动）')
+        self.update_mmproj_hint()
+
+    def on_mmproj_pick(self):
+        """手动选了具体 mmproj 或回到自动 → 按模型记住，刷新提示。"""
+        m = self.current_model
+        v = self.mmproj_sel.get()
+        if m:
+            self.cfg.setdefault('mmproj', {})[m] = v
+            save_cfg(self.cfg)
+            if v != '（自动）':
+                self.append_log(f'>>> {m} 的 mmproj 已手动指定：{v}')
+        self.update_mmproj_hint()
+
+    def update_mmproj_hint(self):
+        """投影文件下拉旁的小字：手动/自动匹配到谁/没匹配到；悬浮可看完整文件名。"""
+        if not hasattr(self, 'mmproj_sel'):
+            return
+        v = self.mmproj_sel.get()
+        if v != '（自动）':
+            self.mmproj_hint.configure(text=v, fg='#e8b04a')
+            self._mmproj_hint_tt.lab.configure(text='已手动指定：' + v)
+            return
+        m = self.current_model
+        if not m:
+            self.mmproj_hint.configure(text='', fg='#9fd6a5')
+            self._mmproj_hint_tt.lab.configure(text='')
+            return
+        mm = find_mmproj(m)
+        if mm:
+            fn = os.path.basename(mm)
+            self.mmproj_hint.configure(text=fn, fg='#9fd6a5')
+            self._mmproj_hint_tt.lab.configure(text='自动匹配：' + fn)
+        else:
+            self.mmproj_hint.configure(text='自动未匹配（可手动选）', fg='#e8b04a')
+            self._mmproj_hint_tt.lab.configure(text='自动未匹配到合适的投影文件，可手动指定')
 
     def get_category(self, model):
         return self.cfg.get('categories', {}).get(model, '未指定')
@@ -847,6 +953,7 @@ class App(ctk.CTk):
             else:
                 set_entry(w, v)
         set_entry(self.w_n_batch, p.get('n_batch'))
+        set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         if p.get('thinking', True):
             self.think_chk.select()
         else:
@@ -890,6 +997,7 @@ class App(ctk.CTk):
             'temp': fltv('温度', self.w_temp.get().strip()),
             'top_p': fltv('top-p', self.w_top_p.get().strip()),
             'n_batch': self.w_n_batch.get().strip(),
+            'reasoning_budget': intv('推理预算', self.w_reasoning_budget.get().strip()),
             'thinking': bool(self.think_chk.get()),
             'gemma': bool(self.gemma_chk.get()),
             'mm': bool(self.mm_chk.get()),
@@ -1465,6 +1573,8 @@ class App(ctk.CTk):
             args += ['--main-gpu', gpu.split(',')[0].strip()]
         if val(p.get('n_batch')):
             args += ['--batch-size', str(p['n_batch'])]
+        if val(p.get('reasoning_budget')):
+            args += ['--reasoning-budget', str(p['reasoning_budget'])]
         args += ['--reasoning', 'on' if p.get('thinking', True) else 'off']
         gemma = p.get('gemma')
         if gemma is None:
@@ -1472,11 +1582,15 @@ class App(ctk.CTk):
         if gemma and os.path.exists(JINJA):
             args += ['--chat-template-file', JINJA]
         if p.get('mm'):
-            mm = find_mmproj(model)
+            manual = self.cfg.get('mmproj', {}).get(model, '（自动）')
+            if manual != '（自动）' and os.path.exists(os.path.join(MODELS_DIR, manual)):
+                mm = os.path.join(MODELS_DIR, manual)   # 参数区「投影文件」手动指定优先
+            else:
+                mm = find_mmproj(model)
             if mm:
                 args += ['--mmproj', mm]
             else:
-                self.append_log('!!! 多模态已勾选，但 models/ 里没找到 mmproj 投影文件，未加 --mmproj')
+                self.append_log('!!! 多模态已勾选，但没找到匹配当前模型的 mmproj 投影文件（可在参数区「投影文件」手动指定），未加 --mmproj')
         return args
 
     def start(self):

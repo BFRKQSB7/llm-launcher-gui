@@ -37,6 +37,9 @@
       // 思考模式（--reasoning on/off）：true=推理模型先思考再答，false=直出答案。
       // 留空/缺省 = 开。Murasaki / Qwen3 / DeepSeek 等推理模型用
       "thinking": true,
+      // 推理预算（--reasoning-budget）：思考/推理模型在「思考」阶段最多花费的 token。
+      // -1=不限 / 0=立即结束思考 / N=预算。留空 = 不传（llama 默认 -1 不限）。配思考模式用
+      "reasoning_budget": "",
       // 多模态：true=带 --mmproj，自动加载 models/ 里匹配的 mmproj 投影文件。
       // Qwen2.5-VL / LLaVA / MiniCPM-V 等视觉模型用。缺省 = 关
       "mm": false,
