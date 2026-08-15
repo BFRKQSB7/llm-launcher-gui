@@ -97,7 +97,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -551,6 +551,13 @@ class App(ctk.CTk):
         self.w_n_batch = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不传')
         self.w_n_batch.grid(row=base + 2, column=1, padx=(6, 14), pady=5, sticky='w')
 
+        # CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单
+        lab = ctk.CTkLabel(pf, text='CORS 允许源', anchor='w', width=110)
+        lab.grid(row=base + 3, column=0, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。*=允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 默认不启用 CORS）。')
+        self.w_cors = ctk.CTkEntry(pf, width=220, placeholder_text='* 或 http://localhost:3000')
+        self.w_cors.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
+
         # 思考模式开关（预设参数，默认开；on→--reasoning on，off→--reasoning off；Murasaki/Qwen3/DeepSeek 等推理模型用）
         self.think_chk = ctk.CTkCheckBox(pf, text='思考模式', command=self.on_thinking_toggle)
         self.think_chk.grid(row=3, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
@@ -622,7 +629,7 @@ class App(ctk.CTk):
             menu.configure(command=handler)
 
         for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch,
-                  self.w_reasoning_budget, self.mmproj_sel]:
+                  self.w_reasoning_budget, self.mmproj_sel, self.w_cors]:
             if isinstance(w, ctk.CTkEntry):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
@@ -953,6 +960,7 @@ class App(ctk.CTk):
             else:
                 set_entry(w, v)
         set_entry(self.w_n_batch, p.get('n_batch'))
+        set_entry(self.w_cors, p.get('cors'))
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         if p.get('thinking', True):
             self.think_chk.select()
@@ -997,6 +1005,7 @@ class App(ctk.CTk):
             'temp': fltv('温度', self.w_temp.get().strip()),
             'top_p': fltv('top-p', self.w_top_p.get().strip()),
             'n_batch': self.w_n_batch.get().strip(),
+            'cors': self.w_cors.get().strip(),
             'reasoning_budget': intv('推理预算', self.w_reasoning_budget.get().strip()),
             'thinking': bool(self.think_chk.get()),
             'gemma': bool(self.gemma_chk.get()),
@@ -1568,6 +1577,8 @@ class App(ctk.CTk):
             args += ['--host', str(p['host'])]
         if val(p.get('port')):
             args += ['--port', str(p['port'])]
+        if val(p.get('cors')):
+            args += ['--cors', str(p['cors'])]
         gpu = p.get('gpu')
         if val(gpu) and gpu != '自动':
             args += ['--main-gpu', gpu.split(',')[0].strip()]

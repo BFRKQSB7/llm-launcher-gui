@@ -65,6 +65,8 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.5.0 (2026-08-15) New:
+  - New: "CORS 允许源" parameter (`--cors`) — whitelist of browser origins allowed to call the API, sitting under batch size; `*` = allow any origin, or list specific origins comma-separated; blank = not passed
 - v1.4.0 (2026-08-15) New + fix + polish:
   - New: "推理预算" parameter (`--reasoning-budget`) — limits tokens reasoning models spend thinking; sits right under the thinking-mode toggle; blank = unlimited
   - New: "投影文件" dropdown in the parameters area — manually pin the projector file for the current model (handles generic names like `mmproj-F16.gguf`), remembered per model, takes priority over auto-matching
