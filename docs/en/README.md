@@ -51,7 +51,7 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 | `gemma_chat_template.jinja` | Chat template for Gemma models |
 | `presets_template.json` | Preset template (commented JSONC). **Kept in the repo — download it yourself if needed**; copy to `llm_presets.json` or import it via Settings → Import presets |
 | `app.ico` | Program icon |
-| `维护清单.md` | File maintenance checklist (project structure & search anchors, for maintainers) |
+| `维护文档.md` | File maintenance doc (project structure & search anchors, for maintainers) |
 
 > Release packages ship `LLMGUI.exe` only by default; `presets_template.json` lives at the repo root for users who need it to download.
 

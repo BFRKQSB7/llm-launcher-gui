@@ -53,7 +53,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 | `gemma_chat_template.jinja` | Gemma 聊天模板 |
 | `presets_template.json` | 预设模板（带注释的 JSONC）。**随仓库提供，有需要的用户自行下载**；复制成 llm_presets.json 或从「设置→导入预设」合并即可用 |
 | `app.ico` | 程序图标 |
-| `维护清单.md` | 文件维护清单（项目结构与检索锚点，供后续维护用） |
+| `维护文档.md` | 文件维护文档（项目结构与检索锚点，供后续维护用） |
 
 > 发布包（Release）默认仅含 `LLMGUI.exe` 单文件；`presets_template.json` 在仓库根目录，有需要的用户自行下载。
 
