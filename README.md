@@ -4,6 +4,8 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 > [English](docs/en/README.md)
 
+![](https://img.shields.io/badge/version-v1.5.0-blue)
+
 ## 特性
 
 - 扫描 `models/` 列出本地 GGUF 模型，一键启动 / 停止 `llama-server`
@@ -63,7 +65,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all customtkinter llm_gui.py
 ```
 
-## 版本
+## 变更日志
 
 - v1.5.0（2026-08-15）新增：
   - 新增：参数「CORS 允许源」（`--cors`）——浏览器跨域访问 API 的来源白名单，位于批处理大小下方；`*` = 允许任意来源，或写具体来源、多个用逗号分隔；留空 = 不传
