@@ -798,7 +798,7 @@ class App(ctk.CTk):
             cat = {'temp': 0.1, 'top_p': 0.9, 'n_predict': 4096}
         return {'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
                 'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
-                'parallel': 1, 'port': 4000, 'host': '127.0.0.1',
+                'parallel': 1, 'port': 8080, 'host': '127.0.0.1',
                 'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
                 'mm': False}
 
