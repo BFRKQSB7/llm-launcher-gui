@@ -4,7 +4,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 > [English](docs/en/README.md)
 
-![](https://img.shields.io/badge/version-v1.5.0-blue)
+![](https://img.shields.io/badge/version-v1.6.0-blue)
 
 ## 特性
 
@@ -67,6 +67,9 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## 变更日志
 
+- v1.6.0（2026-08-17）新增 + 修改：
+  - 新增：模型下拉右侧 `⟳` 刷新按钮——强制重新扫描 `models/` 目录，增删模型即时生效；刷新期间按钮禁用防重复点击，当前选中的模型若还在列表则保持不变
+  - 修改：默认端口 4000 → 8080（对齐 llama.cpp 默认）
 - v1.5.0（2026-08-15）新增：
   - 新增：参数「CORS 允许源」（`--cors`）——浏览器跨域访问 API 的来源白名单，位于批处理大小下方；`*` = 允许任意来源，或写具体来源、多个用逗号分隔；留空 = 不传
 - v1.4.0（2026-08-15）新增 + 修复 + 优化：

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """LLM GUI — 本地 llama-server 桌面启动器（customtkinter 原生窗口，不依赖浏览器）
 
-- 扫描 models/ 列模型；每模型多套预设
+- 扫描 models/ 列模型；每模型多套预设；模型下拉右侧 ⟳ 按钮可强制重新扫描
 - 上下文长度：自定义 + 右侧预设下拉（4K~64K）
 - 并发请求 1/2/4/8/16 → 自动算每线程上下文（并发=1 不显示）
 - 思考模式开关（默认开，存为预设参数）：on→--reasoning on / off→--reasoning off（Murasaki/Qwen3/DeepSeek 等推理模型）
@@ -45,6 +45,7 @@
 #     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 左列 row2 起、右列 row0 起（右列与左列顶部对齐）；
 #     思考模式(row3,2)、推理预算(row4,2)、多模态+投影文件(row5,2)、Gemma(row6,2) 为硬编码，增删 PARAMS 项后须手动检查
 #   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
+#     refresh_models（⟳ 按钮，异步重扫 models/，保留当前选中；期间按钮禁用）→ 检索「def refresh_models」
 #     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
 #     思考模式/多模态 thinking/mm 已是预设参数（thinking 默认开、mm 默认关）
 #   - 多模态投影：find_mmproj（models/ 里按文件名 token 匹配 mmproj 投影文件；单个直接用、多个选最像的、都不像返回 None）；参数区「投影文件」下拉可手动指定（按模型存 cfg['mmproj']，优先于自动匹配）→ 检索「def find_mmproj」「def refresh_mmproj_menu」
@@ -97,7 +98,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -435,8 +436,15 @@ class App(ctk.CTk):
         self.top_frame.grid_columnconfigure(1, weight=1)
         # 第一行：模型 + 模型定位 + 计算默认
         ctk.CTkLabel(self.top_frame, text='模型').grid(row=0, column=0, padx=(12, 6), pady=6)
-        self.model_sel = ctk.CTkOptionMenu(self.top_frame, values=[], command=lambda _: self.on_model_change(), width=260)
-        self.model_sel.grid(row=0, column=1, padx=6, pady=6, sticky='ew')
+        rowm = ctk.CTkFrame(self.top_frame, fg_color='transparent')
+        rowm.grid(row=0, column=1, padx=6, pady=6, sticky='ew')
+        rowm.grid_columnconfigure(0, weight=1)
+        self.model_sel = ctk.CTkOptionMenu(rowm, values=[], command=lambda _: self.on_model_change(), width=260)
+        self.model_sel.grid(row=0, column=0, sticky='ew')
+        self.refresh_btn = ctk.CTkButton(rowm, text='⟳', width=32, command=self.refresh_models,
+                                         fg_color='#3a3f4b', hover_color='#4a5263')
+        ToolTip(self.refresh_btn, '刷新模型列表：重新扫描 models/ 目录下的模型文件')
+        self.refresh_btn.grid(row=0, column=1, padx=(6, 0))
         ctk.CTkLabel(self.top_frame, text='模型定位').grid(row=0, column=2, padx=(20, 6), pady=6)
         self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=['未指定', '聊天', '通用', '翻译', '角色扮演', '文学创作'], width=110,
                                          command=lambda _: self.on_category_change())
@@ -655,6 +663,44 @@ class App(ctk.CTk):
         self.model_sel.set(m if m else '（models 目录为空）')
         self.current_model = m
 
+    def refresh_models(self):
+        """⟳ 按钮：强制重扫 models/ 目录。后台线程扫描，结果经 _q 回主线程，不阻塞 UI。"""
+        if not os.path.isdir(MODELS_DIR):
+            self.append_log('!!! models 目录不存在：' + os.path.normpath(MODELS_DIR))
+            return
+        self.refresh_btn.configure(state='disabled', text='⏳')
+        self.append_log('>>> 正在刷新模型列表…')
+
+        def work():
+            try:
+                self._q.put(('models', self.models_list(), None))
+            except Exception as e:
+                self._q.put(('models', [], str(e)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_refreshed_models(self, ms, err):
+        # 主线程：刷新完成。恢复按钮；当前选中的模型还在列表里就保持不变，否则回落第一个
+        self.refresh_btn.configure(state='normal', text='⟳')
+        if err:
+            self.append_log('!!! 刷新模型列表失败: ' + err)
+            return
+        cur = self.current_model
+        keep = cur if (cur and cur in ms) else None
+        self.model_sel.configure(values=ms if ms else ['（models 目录为空）'])
+        if keep:
+            self.model_sel.set(keep)
+            self.append_log(f'>>> 模型列表已刷新：{len(ms)} 个模型（保持选中 {keep}）')
+        elif ms:
+            self.model_sel.set(ms[0])
+            self.current_model = ms[0]
+            self.append_log(f'>>> 模型列表已刷新：{len(ms)} 个模型（原模型已移除，切到 {ms[0]}）')
+            self.on_model_change()   # 同步预设 / mmproj / 自动计算
+        else:
+            self.model_sel.set('（models 目录为空）')
+            self.current_model = None
+            self.append_log('>>> 模型列表已刷新：models 目录为空')
+
     def on_model_change(self):
         m = self.model_sel.get()
         if not m or m.startswith('（'):
@@ -826,6 +872,9 @@ class App(ctk.CTk):
                     self._apply_gpus(gpus)
                     if then_compute:
                         self.apply_computed_defaults()
+                elif kind == 'models':
+                    _, ms, err = item
+                    self._apply_refreshed_models(ms, err)
                 elif kind == 'error':
                     self.append_log('!!! ' + item[1])
             except Exception as e:

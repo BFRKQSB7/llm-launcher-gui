@@ -65,6 +65,9 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.6.0 (2026-08-17) New + changed:
+  - New: a `⟳` refresh button to the right of the model dropdown — force-rescans `models/`, new/deleted models take effect immediately; the button is disabled during the scan to prevent double-clicks, and the currently selected model stays selected if it is still in the list
+  - Changed: default port 4000 → 8080 (aligned with llama.cpp default)
 - v1.5.0 (2026-08-15) New:
   - New: "CORS 允许源" parameter (`--cors`) — whitelist of browser origins allowed to call the API, sitting under batch size; `*` = allow any origin, or list specific origins comma-separated; blank = not passed
 - v1.4.0 (2026-08-15) New + fix + polish:
