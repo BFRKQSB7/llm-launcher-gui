@@ -568,7 +568,7 @@ class App(ctk.CTk):
         # CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单
         lab = ctk.CTkLabel(pf, text='CORS 允许源', anchor='w', width=110)
         lab.grid(row=base + 3, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。默认 * = 允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 不启用 CORS）。')
+        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。*=允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 不启用 CORS）。')
         self.w_cors = ctk.CTkEntry(pf, width=220, placeholder_text='* 或 http://localhost:3000')
         self.w_cors.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
 
@@ -872,7 +872,7 @@ class App(ctk.CTk):
                 'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
                 'parallel': 1, 'port': port, 'host': '127.0.0.1',
                 'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
-                'mm': False, 'cors': '*'}
+                'mm': False, 'cors': ''}
 
     def _poll_q(self):
         # 主线程轮询工作线程结果（tkinter 的 after 不能从子线程调）
@@ -1048,7 +1048,7 @@ class App(ctk.CTk):
             else:
                 set_entry(w, v)
         set_entry(self.w_n_batch, p.get('n_batch'))
-        set_entry(self.w_cors, p.get('cors') if p.get('cors') is not None else '*')   # CORS 缺省=*；显式留空=不传
+        set_entry(self.w_cors, p.get('cors'))   # CORS 缺省=留空=不传
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         if p.get('thinking', True):
             self.think_chk.select()
