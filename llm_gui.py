@@ -102,6 +102,7 @@ VERSION = '1.6.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
+_SRC_MAX = 10   # 参数来源标识最大显示字符数；超出截断 + 完整内容进悬浮提示（防顶宽）
 
 
 def _lan_ip():
@@ -620,7 +621,7 @@ class App(ctk.CTk):
 
     def _bind_param_edit_marker(self):
         def mark(_=None):
-            self.param_src_lab.configure(text='✏ 手动调整', text_color='#e8b04a')
+            self._set_param_src('✏ 手动调整', '#e8b04a')
 
         def wrap(menu):
             try:
@@ -649,6 +650,24 @@ class App(ctk.CTk):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
                 wrap(w)
+
+    def _set_param_src(self, text, color, tip=None):
+        """设置参数来源标识（⚡自动计算/📌预设/✏手动调整）。超长截断避免把
+        「模型/模型定位」那行顶宽，完整内容（预设名/显存细节）放悬浮提示。"""
+        if len(text) > _SRC_MAX:
+            text = text[:_SRC_MAX - 1] + '…'
+        self.param_src_lab.configure(text=text, text_color=color)
+        tt = getattr(self, '_src_tooltip', None)
+        if tip:
+            if tt is None:
+                self._src_tooltip = ToolTip(self.param_src_lab, tip)
+            else:
+                tt.text = tip
+                tt.lab.configure(text=tip)
+        elif tt is not None:
+            tt.text = ''
+            tt.lab.configure(text='')
+            tt.lab.place_forget()
 
     # ---------- 数据 ----------
     def models_list(self):
@@ -722,7 +741,7 @@ class App(ctk.CTk):
             self.set_params(ps[pick])
             self.preset_name.delete(0, 'end')
             self.preset_name.insert(0, pick)   # 输入框显示预设名
-            self.param_src_lab.configure(text=f'📌 预设：{pick}', text_color='#e8c468')
+            self._set_param_src(f'📌 预设：{pick}', '#e8c468', tip=pick)
             self._preset_locked = True
             self.cfg.setdefault('last_preset', {})[m] = pick
             save_cfg(self.cfg)
@@ -730,7 +749,7 @@ class App(ctk.CTk):
             self._preset_locked = False
             self.preset_name.delete(0, 'end')
             self.preset_name.insert(0, stem)   # 无预设 → 输入框显示模型名
-            self.param_src_lab.configure(text='')
+            self._set_param_src('', '#8ab4f8')
             self.apply_computed_defaults(m)
         self.update_preset_controls()   # 刷新删预设按钮状态/颜色（自动应用预设后要变鲜艳）
 
@@ -863,7 +882,7 @@ class App(ctk.CTk):
                     self._save_computed_defaults(model, params)
                     if self.current_model == model and (force or not self._preset_locked):
                         self.set_params(params)
-                        self.param_src_lab.configure(text=f'⚡ 自动计算（{vram}G 显存 + 模型大小）', text_color='#8ab4f8')
+                        self._set_param_src('⚡ 自动计算', '#8ab4f8', tip=f'{vram}G 显存 + 模型大小 自动计算')
                         self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）')
                 elif kind == 'gpus':
                     _, gpus = item
@@ -970,7 +989,7 @@ class App(ctk.CTk):
         n = self.preset_sel.get()
         if n and n != '（无预设）' and self.current_model and n in self.presets.get(self.current_model, {}):
             self.set_params(self.presets[self.current_model][n])
-            self.param_src_lab.configure(text=f'📌 预设：{n}', text_color='#e8c468')
+            self._set_param_src(f'📌 预设：{n}', '#e8c468', tip=n)
             self._preset_locked = True   # 加载预设后，挂起的自动计算不覆盖用户预设参数
             self.cfg.setdefault('last_preset', {})[self.current_model] = n
             save_cfg(self.cfg)
@@ -1137,7 +1156,7 @@ class App(ctk.CTk):
             self.preset_sel.set(name)
             self.cfg.setdefault('last_preset', {})[self.current_model] = name
             save_cfg(self.cfg)
-            self.param_src_lab.configure(text=f'📌 预设：{name}', text_color='#e8c468')
+            self._set_param_src(f'📌 预设：{name}', '#e8c468', tip=name)
             self.update_preset_controls()
             self.append_log(f'>>> 已存预设「{name}」({self.current_model})')
 
@@ -1183,7 +1202,7 @@ class App(ctk.CTk):
         self.preset_sel.set(new)
         self.preset_name.delete(0, 'end')
         self.preset_name.insert(0, new)
-        self.param_src_lab.configure(text=f'📌 预设：{new}', text_color='#e8c468')
+        self._set_param_src(f'📌 预设：{new}', '#e8c468', tip=new)
         self.append_log(f'>>> 已重命名预设「{n}」→「{new}」')
 
     def find_orphan_presets(self):

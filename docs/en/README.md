@@ -69,6 +69,7 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
   - New: a `⟳` refresh button to the right of the model dropdown — force-rescans `models/`, new/deleted models take effect immediately; the button is disabled during the scan to prevent double-clicks, and the currently selected model stays selected if it is still in the list
   - Changed: default port 4000 → 8080 (aligned with llama.cpp default)
   - Fix: when `llama-server.exe` is missing the app no longer blocks startup with an error dialog — it opens anyway and shows a non-blocking warning (also logged), so you can set the llama path in Settings
+  - Polish: the parameter-source marker (⚡ auto-compute / 📌 preset / ✏ manually edited) truncates over-long text and moves the full detail into a hover tooltip — the model/category row is no longer crowded by a long preset name or VRAM description
 - v1.5.0 (2026-08-15) New:
   - New: "CORS 允许源" parameter (`--cors`) — whitelist of browser origins allowed to call the API, sitting under batch size; `*` = allow any origin, or list specific origins comma-separated; blank = not passed
 - v1.4.0 (2026-08-15) New + fix + polish:
