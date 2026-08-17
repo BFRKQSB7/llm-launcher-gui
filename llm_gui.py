@@ -98,11 +98,13 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
 _SRC_MAX = 10   # 参数来源标识最大显示字符数；超出截断 + 完整内容进悬浮提示（防顶宽）
+GPU_BOX_PAD = 58   # 显卡下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
+GPU_BOX_MAX = 180  # 显卡下拉逻辑宽度上限：保证右侧「检查配置」按钮不被压缩顶没（rowg 最大 180+8+68=256 < col1 最小 ~284）
 
 
 def _lan_ip():
@@ -123,7 +125,7 @@ PARAMS = [
     dict(k='temp', t='温度 temp', tip='采样温度。越低越确定/保守（翻译 0.1~0.3），越高越随机。留空=用 llama 默认。'),
     dict(k='top_p', t='top-p', tip='核采样阈值。越低越保守，越高越多样。留空=用 llama 默认。'),
     dict(k='n_predict', t='最大输出', tip='单次请求最多生成的 token 数。翻译 4096 够；提示词转换 512 足够。留空=不限。'),
-    dict(k='port', t='端口', tip='llama-server 监听端口。留空=用 llama 默认 8080；与已运行的其他实例错开，避免端口冲突。'),
+    dict(k='port', t='端口', tip='llama-server 监听端口。留空=用 llama 默认 8080（可在「设置」设默认端口）；与已运行的其他实例错开，避免端口冲突。'),
 ]
 
 
@@ -548,8 +550,10 @@ class App(ctk.CTk):
         ToolTip(lab, '选择用于推理的显卡（--main-gpu）。「自动」不传该参数，由 llama 自行选择。')
         rowg = ctk.CTkFrame(pf, fg_color='transparent')
         rowg.grid(row=base + 1, column=1, sticky='w', padx=(6, 14), pady=5)
-        self.gpu_sel = ctk.CTkOptionMenu(rowg, values=['自动'], width=260)
+        self.gpu_sel = ctk.CTkOptionMenu(rowg, values=['自动'], width=GPU_BOX_MAX,
+                                         command=lambda _: self._update_gpu_tip())
         self.gpu_sel.pack(side='left')
+        self.gpu_tip = ToolTip(self.gpu_sel, '选择用于推理的显卡（--main-gpu）。「自动」不传该参数，由 llama 自行选择。')
         self.recheck_btn = ctk.CTkButton(rowg, text='检查配置', width=68, command=self.recheck_hardware)
         ToolTip(self.recheck_btn, '重新检测本机显卡与显存')
         self.recheck_btn.pack(side='left', padx=(8, 0))
@@ -564,7 +568,7 @@ class App(ctk.CTk):
         # CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单
         lab = ctk.CTkLabel(pf, text='CORS 允许源', anchor='w', width=110)
         lab.grid(row=base + 3, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。*=允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 默认不启用 CORS）。')
+        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。默认 * = 允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 不启用 CORS）。')
         self.w_cors = ctk.CTkEntry(pf, width=220, placeholder_text='* 或 http://localhost:3000')
         self.w_cors.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
 
@@ -837,7 +841,7 @@ class App(ctk.CTk):
         self.cfg.setdefault('categories', {})[model] = cat
         save_cfg(self.cfg)
 
-    def compute_defaults(self, model, category):
+    def compute_defaults(self, model, category, cur_port=''):
         vram_gb = self.get_vram_gb()
         try:
             model_gb = os.path.getsize(os.path.join(MODELS_DIR, model)) / (1024 ** 3)
@@ -862,11 +866,13 @@ class App(ctk.CTk):
         if self.is_gemma(model):
             # Gemma 特适配：低温度 + 长输出（需 --chat-template-file）
             cat = {'temp': 0.1, 'top_p': 0.9, 'n_predict': 4096}
+        # 端口不随自动计算覆盖：保留当前输入；未设则用设置里的默认端口（兜底 llama 默认 8080）
+        port = cur_port or str(self.cfg.get('default_port') or 8080)
         return {'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
                 'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
-                'parallel': 1, 'port': 8080, 'host': '127.0.0.1',
+                'parallel': 1, 'port': port, 'host': '127.0.0.1',
                 'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
-                'mm': False}
+                'mm': False, 'cors': '*'}
 
     def _poll_q(self):
         # 主线程轮询工作线程结果（tkinter 的 after 不能从子线程调）
@@ -944,10 +950,11 @@ class App(ctk.CTk):
         if not model:
             return
         cat = self.get_category(model)
+        cur_port = self.w_port.get().strip()   # 主线程读端口再传后台线程（widget 不能跨线程访问）
 
         def work():
             try:
-                params = self.compute_defaults(model, cat)
+                params = self.compute_defaults(model, cat, cur_port)
                 self._q.put(('params', model, cat, params, self.get_vram_gb(), force))
             except Exception as e:
                 self._q.put(('error', f'计算默认参数失败: {e}'))
@@ -1026,9 +1033,11 @@ class App(ctk.CTk):
         if gv in (None, '', '自动'):
             self.gpu_sel.set('自动')
         else:
-            if str(gv) not in self.gpu_sel.cget('values'):
+            s = self._clip_gpu_name(str(gv), GPU_BOX_MAX)
+            if s not in self.gpu_sel.cget('values'):
                 self.gpu_sel.configure(values=['自动'] + (self.gpu_sel.cget('values') or []))
-            self.gpu_sel.set(str(gv))
+            self.gpu_sel.set(s)
+        self._update_gpu_tip()
         for pp in PARAMS:
             w = getattr(self, 'w_' + pp['k'], None)
             v = p.get(pp['k'])
@@ -1039,7 +1048,7 @@ class App(ctk.CTk):
             else:
                 set_entry(w, v)
         set_entry(self.w_n_batch, p.get('n_batch'))
-        set_entry(self.w_cors, p.get('cors'))
+        set_entry(self.w_cors, p.get('cors') if p.get('cors') is not None else '*')   # CORS 缺省=*；显式留空=不传
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         if p.get('thinking', True):
             self.think_chk.select()
@@ -1131,10 +1140,69 @@ class App(ctk.CTk):
         # 从缓存读显卡列表（首次由 _startup_hardware 检测并写入）
         self._apply_gpus(self.get_cached_gpus())
 
+    def _clip_gpu_name(self, s, target=None):
+        """超长显卡名截断为下拉可显示长度（保留前缀+省略号），避免撑宽整行顶掉右侧按钮。
+        target：逻辑宽度（默认用当前盒子宽度）；盒子按 GPU_BOX_MAX 裁剪、再按实际文本自适应。"""
+        try:
+            lab = self.gpu_sel._text_label
+            f = tkfont.Font(font=lab.cget('font'))
+            avail = ((target if target is not None else self.gpu_sel._desired_width) - GPU_BOX_PAD) * self._get_window_scaling()
+            if f.measure(s) <= avail:
+                return s
+            lo, hi = 1, len(s)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if f.measure(s[:mid] + '…') <= avail:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            return s[:lo] + '…'
+        except Exception:
+            return s if len(s) <= 20 else s[:20] + '…'
+
+    def _size_gpu_box(self):
+        """显卡下拉按当前文本自适应宽度（'自动' 短框、长名封顶 GPU_BOX_MAX）。
+        rowg = 下拉 + 8 + 检查配置按钮(68)，封顶后最大 256 < col1 最小 ~284，按钮恒全宽可见。"""
+        try:
+            f = tkfont.Font(font=self.gpu_sel._text_label.cget('font'))
+            tw = f.measure(self.gpu_sel.get())
+        except Exception:
+            tw = 0
+        try:
+            w = min(max(int(tw / self._get_window_scaling()) + GPU_BOX_PAD, 90), GPU_BOX_MAX)
+            if w != self.gpu_sel._desired_width:
+                self.gpu_sel.configure(width=w)
+        except Exception:
+            pass
+
+    def _update_gpu_tip(self):
+        """显卡下拉悬浮提示显示完整显卡名（下拉内显示的是截断的识别名）；顺带按选项自适应盒子宽度。"""
+        try:
+            self._size_gpu_box()
+            cur = self.gpu_sel.get()
+            full_list = getattr(self, '_gpu_full', None)
+            if cur and cur != '自动' and full_list:
+                idx = cur.split(',')[0].strip()
+                full = next((x for x in full_list if x.split(',')[0].strip() == idx), cur)
+                txt = f'当前显卡：{full}\n（--main-gpu {idx}）\n「自动」不传该参数，由 llama 自行选择。'
+            else:
+                txt = '选择用于推理的显卡（--main-gpu）。「自动」不传该参数，由 llama 自行选择。'
+            tip = getattr(self, 'gpu_tip', None)
+            if tip is not None:
+                tip.text = txt
+                tip.lab.configure(text=txt)
+        except Exception:
+            pass
+
     def _apply_gpus(self, gpus):
-        self.gpu_sel.configure(values=['自动'] + gpus)
+        self._gpu_full = gpus or []
+        self.gpu_sel.configure(width=GPU_BOX_MAX)   # 先按最大宽度裁剪名字（盒子可能已被缩到 '自动' 短框）
+        short = ['自动'] + [self._clip_gpu_name(x) for x in (gpus or [])]
+        self.gpu_sel.configure(values=short)
         cur = self.gpu_sel.get()
-        self.gpu_sel.set(cur if cur in self.gpu_sel.cget('values') else '自动')
+        self.gpu_sel.set(cur if cur in short else '自动')
+        self._size_gpu_box()   # 按当前选项把盒子缩到合适宽度
+        self._update_gpu_tip()
         self.append_log(f'>>> 检测到 {len(gpus)} 块显卡' if gpus else '>>> 未检测到 NVIDIA 显卡')
 
     def save_preset(self):
@@ -1400,7 +1468,12 @@ class App(ctk.CTk):
             for chk in self._preset_chks.values():
                 chk.select() if val else chk.deselect()
 
+        def invert():
+            for chk in self._preset_chks.values():
+                chk.toggle()
+
         ctk.CTkButton(bar, text='全选', width=70, command=lambda: set_all(True)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, text='反选', width=70, command=invert).pack(side='left', padx=4)
         ctk.CTkButton(bar, text='取消全选', width=90, command=lambda: set_all(False)).pack(side='left', padx=4)
         ctk.CTkButton(bar, text='删除选中', width=90, fg_color='#8a3f3f', hover_color='#9a4848',
                       command=lambda: self.delete_selected_presets(dlg)).pack(side='right', padx=4)
@@ -1411,8 +1484,10 @@ class App(ctk.CTk):
         if not sel:
             messagebox.showinfo('删除预设', '未勾选任何预设')
             return
-        if not messagebox.askyesno('删除预设', f'确认删除 {len(sel)} 条预设？'):
-            return
+        self._confirm_dlg('删除预设', f'确认删除 {len(sel)} 条预设？',
+                          lambda: self._do_delete_selected(dlg, sel), parent=dlg)
+
+    def _do_delete_selected(self, dlg, sel):
         for m, n in sel:
             if m in self.presets and isinstance(self.presets[m], dict) and n in self.presets[m]:
                 del self.presets[m][n]
@@ -1457,11 +1532,61 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text='覆盖', width=96, fg_color='#2f7a50', hover_color='#358a5c', command=ok).pack(side='left', padx=10)
         ctk.CTkButton(btns, text='取消', width=96, command=dlg.destroy).pack(side='left', padx=10)
 
+    def _confirm_dlg(self, title, msg, on_yes, parent=None, yes_text='确认删除'):
+        """二次确认弹窗：置顶居中 + 单例（已有确认窗则前置复用，不叠窗口）。
+
+        用 CTkToplevel 而非 messagebox.askyesno——后者在父窗口 grab 下不置顶、
+        抢不到焦点，用户连点删除按钮会叠出一堆确认窗。
+        """
+        old = getattr(self, '_confirm_open', None)
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.lift()
+                    old.focus_force()
+                    return
+            except Exception:
+                pass
+        dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
+        dlg.title(title)
+        dlg.geometry('400x170')
+        dlg.resizable(False, False)
+        dlg.transient(parent or self)
+        dlg.attributes('-topmost', True)
+        dlg.after(10, lambda: self._center_on_main(dlg))
+        dlg.grab_set()
+        ctk.CTkLabel(dlg, text=msg, font=('Microsoft YaHei', 14), wraplength=360).pack(pady=(24, 4))
+        btns = ctk.CTkFrame(dlg, fg_color='transparent')
+        btns.pack(pady=(12, 16))
+
+        def close():
+            self._confirm_open = None
+            dlg.destroy()
+
+        def yes():
+            close()
+            on_yes()
+
+        def no():
+            close()
+            if parent is not None:
+                try:   # 确认窗 grab 抢走了父窗 grab，取消后归还给父窗
+                    if parent.winfo_exists():
+                        parent.grab_set()
+                except Exception:
+                    pass
+
+        ctk.CTkButton(btns, text=yes_text, width=110, fg_color='#8a3f3f',
+                      hover_color='#9a4848', command=yes).pack(side='left', padx=8)
+        ctk.CTkButton(btns, text='取消', width=90, command=no).pack(side='left', padx=8)
+        self._confirm_open = dlg
+
     def open_settings(self):
         dlg = ctk.CTkToplevel(self)
         self._apply_icon(dlg)
         dlg.title('设置')
-        dlg.geometry('460x680')
+        dlg.geometry('460x560')   # 高度随后按内容自适应（auto-fit），此处仅给个保底
         dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
@@ -1470,14 +1595,14 @@ class App(ctk.CTk):
         ask = ctk.CTkCheckBox(dlg, text='保存预设时询问是否覆盖同名预设')
         if self.cfg.get('overwrite_ask', True):
             ask.select()
-        ask.pack(pady=(22, 8), padx=24, anchor='w')
+        ask.pack(pady=(14, 6), padx=24, anchor='w')
         sizebox = ctk.CTkCheckBox(dlg, text='记录窗口大小（下次启动恢复同样大小）')
         if self.cfg.get('remember_size', True):
             sizebox.select()
         sizebox.pack(pady=6, padx=24, anchor='w')
 
         # llama-server 路径（全局，不在预设里）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
         ctk.CTkLabel(dlg, text='llama-server.exe 路径（全局，留空=程序同目录）',
                      anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
         spf = ctk.CTkFrame(dlg, fg_color='transparent')
@@ -1497,17 +1622,36 @@ class App(ctk.CTk):
 
         ctk.CTkButton(spf, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
 
+        # 默认端口（全局）：无预设自动计算时保留当前端口；未设端口时用它兜底
+        dpf = ctk.CTkFrame(dlg, fg_color='transparent')
+        dpf.pack(padx=24, pady=(8, 6), fill='x')
+        ctk.CTkLabel(dpf, text='默认端口（全局）', width=130, anchor='w').pack(side='left')
+        dp_entry = ctk.CTkEntry(dpf, placeholder_text='留空=8080')
+        dp_entry.pack(side='left', padx=(8, 0), fill='x', expand=True)
+        dp_entry.insert(0, str(self.cfg.get('default_port', '')))
+
         def save():
             self.cfg['overwrite_ask'] = bool(ask.get())
             self.cfg['remember_size'] = bool(sizebox.get())
             self.cfg['server_path'] = sp_entry.get().strip()
+            dp = dp_entry.get().strip()
+            if dp:
+                try:
+                    dp = int(dp)
+                except ValueError:
+                    messagebox.showwarning('设置', '默认端口需为整数', parent=dlg)
+                    return
+                self.cfg['default_port'] = dp
+            else:
+                self.cfg.pop('default_port', None)
             save_cfg(self.cfg)
             dlg.destroy()
 
-        ctk.CTkButton(dlg, text='保存', width=90, command=save).pack(pady=6)
+        # 保存按钮并入默认端口行（避免端口框过长、也省一整行高度）
+        ctk.CTkButton(dpf, text='保存', width=90, command=save).pack(side='left', padx=(8, 0))
 
         # 预设健康检查（打开设置即自动检查缺失模型的预设）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
         n_orphan = len(self.find_orphan_presets())
         ctk.CTkLabel(dlg, text=f'预设健康检查：缺失模型的预设 {n_orphan} 个',
                      text_color='#e8b04a' if n_orphan else '#7fd9a0').pack(pady=(2, 4))
@@ -1519,7 +1663,7 @@ class App(ctk.CTk):
         ctk.CTkButton(btns, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
 
         # 模型清单（弹出独立窗口）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(12, 2))
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
         ctk.CTkButton(dlg, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
 
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
@@ -1530,8 +1674,16 @@ class App(ctk.CTk):
         link.pack(pady=(2, 0))
         link.bind('<Button-1>', lambda _: webbrowser.open(GITHUB_URL))
 
+        # 高度按内容自适应（逻辑高 = 物理 reqheight / 窗口缩放），消除仓库链接下方留白
+        try:
+            dlg.update_idletasks()
+            h = int(dlg.winfo_reqheight() / dlg._get_window_scaling()) + 8
+            dlg.geometry(f'460x{h}')
+        except Exception:
+            pass
+
     def show_model_list(self):
-        """弹出模型清单窗口：models/ 下所有模型 + 大小 + 总占用"""
+        """弹出模型清单窗口：models/ 下所有 .gguf（模型 + mmproj 投影文件）+ 大小 + 总占用"""
         dlg = ctk.CTkToplevel(self)
         self._apply_icon(dlg)
         dlg.title('模型清单')
@@ -1541,22 +1693,29 @@ class App(ctk.CTk):
         dlg.grab_set()
         dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
-        models = self.models_list()
-        ctk.CTkLabel(dlg, text=f'models/ 目录（{os.path.normpath(MODELS_DIR)}）共 {len(models)} 个：',
-                     anchor='w', font=('Microsoft YaHei', 12)).pack(pady=(14, 4), padx=16, anchor='w')
+        files = []
+        if os.path.isdir(MODELS_DIR):
+            files = sorted(f for f in os.listdir(MODELS_DIR) if f.lower().endswith('.gguf'))
+        n_mm = sum(1 for f in files if 'mmproj' in f.lower())
+        header = f'models/ 目录（{os.path.normpath(MODELS_DIR)}）共 {len(files)} 个'
+        if n_mm:
+            header += f'（含 mmproj 投影文件 {n_mm} 个）'
+        ctk.CTkLabel(dlg, text=header + '：', anchor='w',
+                     font=('Microsoft YaHei', 12)).pack(pady=(14, 4), padx=16, anchor='w')
         box = ctk.CTkTextbox(dlg, state='disabled', wrap='none', font=('Consolas', 12))
         box.pack(fill='both', expand=True, padx=16, pady=4)
         lines = []
         total = 0
-        for f in models:
+        for f in files:
             try:
                 sz = os.path.getsize(os.path.join(MODELS_DIR, f))
             except OSError:
                 sz = 0
             total += sz
             size_s = f'{sz / (1024 ** 3):.2f} GB' if sz >= 1024 ** 3 else f'{sz / (1024 ** 2):.0f} MB'
-            lines.append(f'{clean_model_display(f):<42}{size_s:>9}')
-        if models:
+            mark = '  ← 投影文件' if 'mmproj' in f.lower() else ''
+            lines.append(f'{clean_model_display(f):<42}{size_s:>9}{mark}')
+        if files:
             total_s = f'{total / (1024 ** 3):.2f} GB' if total >= 1024 ** 3 else f'{total / (1024 ** 2):.0f} MB'
             lines.append('-' * 51)
             lines.append('总占用' + ' ' * 36 + f'{total_s:>9}')   # 3 个中文=显示宽 6，补 36 空格对齐 42 列

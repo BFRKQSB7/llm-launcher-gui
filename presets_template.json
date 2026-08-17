@@ -34,9 +34,9 @@
       "gpu": "自动",
       // 批处理大小（--batch-size）。留空 = 不传
       "n_batch": "",
-      // CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单。*=允许任意来源；
+      // CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单。默认 *=允许任意来源；
       // 或写具体来源，多个用逗号分隔（如 http://localhost:3000,http://localhost:5173）。留空 = 不传
-      "cors": "",
+      "cors": "*",
       // 思考模式（--reasoning on/off）：true=推理模型先思考再答，false=直出答案。
       // 留空/缺省 = 开。Murasaki / Qwen3 / DeepSeek 等推理模型用
       "thinking": true,

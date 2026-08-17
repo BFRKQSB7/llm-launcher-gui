@@ -65,6 +65,14 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.7.0 (2026-08-17) New + changed + fix + polish:
+  - New: a default-port setting in Settings (blank = llama's 8080); clicking "compute defaults" with no preset no longer overwrites the port — it keeps your current value, falling back to the default port when unset
+  - New: Settings → Model list now shows every .gguf in models/ including mmproj projector files (marked at the end of the row and counted in the total); the model dropdown still won't treat mmproj files as selectable models
+  - Changed: the CORS allow-origin parameter now defaults to `*` (allow any origin); leaving it blank still means "not passed"
+  - Polish: Settings layout — the "保存" button now sits on the same row as the "默认端口（全局）" field (no more over-long port box); the dialog height auto-fits its content, removing the large blank area at the bottom
+  - Fix: the batch-delete confirmation dialog is now topmost and a singleton — clicking "删除选中" repeatedly no longer stacks multiple confirm windows
+  - New: an "反选" (invert selection) button next to "全选" in the batch preset manager's bottom bar — toggles every selection with one click
+  - Fix: a long GPU name in the dropdown (e.g. "0, NVIDIA GeForce RTX 5070 Ti Laptop GPU") no longer stretches the dropdown and pushes the "检查配置" (check hardware) button off the right edge — over-long names are auto-truncated (keeping the index prefix), the full name moves into a hover tooltip, and the dropdown box resizes to fit the current selection ("自动" shows a compact box, long names are capped) so the button stays fully visible even at the minimum window size
 - v1.6.0 (2026-08-17) New + changed + fix:
   - New: a `⟳` refresh button to the right of the model dropdown — force-rescans `models/`, new/deleted models take effect immediately; the button is disabled during the scan to prevent double-clicks, and the currently selected model stays selected if it is still in the list
   - Changed: default port 4000 → 8080 (aligned with llama.cpp default)
