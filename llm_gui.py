@@ -382,6 +382,7 @@ class App(ctk.CTk):
             self.after(100, self._restore_default_sash)
         self.after(100, self.on_model_change)
         self.after(200, self._startup_hardware)
+        self.after(250, self._check_server)
         self._q = queue.Queue()
         self._preset_locked = False
         self.after(150, self._poll_q)
@@ -905,6 +906,16 @@ class App(ctk.CTk):
             self._apply_gpus(self.get_cached_gpus())
         else:
             self._detect_and_save_hardware(then_compute=True)
+
+    def _check_server(self):
+        # 启动后检查 llama-server.exe：缺失不阻塞界面，只提示 + 记日志（可在「设置」里改路径）
+        exe = self.cfg.get('server_path') or SERVER_EXE
+        if os.path.exists(exe):
+            return
+        msg = ('未找到 llama-server.exe\n请在「设置」里选择 llama 路径，'
+               '或把它放到程序同目录：\n' + os.path.normpath(BASE))
+        self.append_log('!!! 未找到 llama-server.exe（请在「设置」里配置路径，或放到程序同目录）')
+        messagebox.showwarning('LLM GUI', msg)
 
     def recheck_hardware(self):
         self._detect_and_save_hardware(then_compute=True)
@@ -1660,6 +1671,11 @@ class App(ctk.CTk):
             self.append_log('!!! 没有可选模型'); return
         if not os.path.exists(os.path.join(MODELS_DIR, self.current_model)):
             self.append_log('!!! 模型文件不存在：' + self.current_model + '（以后下回来即可用）'); return
+        exe = self.cfg.get('server_path') or SERVER_EXE
+        if not os.path.exists(exe):
+            self.append_log('!!! 未找到 llama-server.exe：' + os.path.normpath(exe)
+                            + '（请在「设置」里选择 llama 路径）')
+            return
         try:
             p = self.read_params()
         except ValueError as e:
@@ -1725,12 +1741,7 @@ class App(ctk.CTk):
 
 def main():
     try:
-        cfg = load_cfg()
-        exe = cfg.get('server_path') or SERVER_EXE
-        if not os.path.exists(exe):
-            messagebox.showerror('LLM GUI',
-                                 '未找到 llama-server.exe\n请在「设置」里选择 llama 路径，或把它放到程序同目录：\n' + BASE)
-            return
+        # 不再阻塞启动：即使 llama-server.exe 缺失也要打开界面，用户才能进「设置」配置路径
         App().mainloop()
     except Exception:
         tb = traceback.format_exc()
