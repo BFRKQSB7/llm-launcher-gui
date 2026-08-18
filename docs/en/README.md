@@ -9,11 +9,14 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - Scans `models/` for local GGUF models, starts / stops `llama-server` in one click
 - Per-model presets: pick model → load preset → start; hover tooltips on every parameter
 - Custom context length + presets (4K ~ 64K); parallel requests auto-compute per-worker context
-- Model category (chat / translation / roleplay / creative writing…) → auto-computes defaults from VRAM + model size
+- Model category (general / chat / translation / roleplay / creative writing / programming / Agent; defaults to general when unset) → auto-computes defaults from VRAM + model size
 - Thinking mode toggle: reasoning models (Murasaki / Qwen3 / DeepSeek…) can turn thinking output on/off (`--reasoning on/off`), default on, saved as a preset parameter
 - Reasoning budget: limits how many tokens reasoning models spend in the "thinking" phase (`--reasoning-budget`), blank = unlimited
 - Multimodal toggle: vision models (Qwen2.5-VL / LLaVA / MiniCPM-V…) launch with `--mmproj`, auto-matching the mmproj projector file in `models/` by filename (picks the best when several), or you can pin one manually via the "投影文件" dropdown (remembered per model); mmproj files are not listed as selectable models
 - Gemma model option: uses the dedicated chat template and suggests a low temperature (a preset parameter; falls back to filename detection when omitted)
+- Image min tokens: vision models with dynamic resolution can set the minimum tokens per image (`--image-min-tokens`), right below the multimodal option; blank = llama reads the default from the model
+- KV not offloaded to GPU: check to keep the KV cache in system memory and free VRAM for more model layers / a bigger context (`--no-kv-offload`); handy for MoE models or tight VRAM; off by default
+- Auto-compute: when a model is bigger than VRAM it now partial-offloads the layers that fit (read from GGUF metadata; MoE benefits most) instead of falling back to pure CPU
 - All parameters can be left empty: empty fields are not passed to llama-server, which then uses its own defaults
 - llama-server.exe path is a global setting (choose it in Settings; leave empty for same-folder)
 - GPU dropdown (auto-detected via `nvidia-smi`); listen on localhost / LAN; KV cache precision options
@@ -40,6 +43,8 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - **Thinking mode**: the "思考模式" checkbox in the parameters area defaults to on → launch with `--reasoning on` (reasoning models think first, e.g. Murasaki's chain-of-thought / Qwen3); uncheck → `--reasoning off` (direct answer). Saved as a preset parameter (treated as on when omitted)
 - **Reasoning budget**: the "推理预算" field under "思考模式" limits how many tokens the model spends thinking (`--reasoning-budget`). `-1`=unlimited / `0`=end thinking immediately / positive=budget; blank = not passed (llama default -1 = unlimited)
 - **Multimodal**: check the "多模态" box → launch with `--mmproj`. The projector defaults to "（自动）" auto-match by filename (a single one is used directly; several → best match; none matches → warning in the log), or pick a specific file in the "投影文件" dropdown (remembered per model, takes priority over auto). Saved as a preset parameter, default off. mmproj files are not listed as selectable models
+- **Image min tokens**: the "图像 Min Tokens" field right under "多模态" sets the minimum tokens per image for vision models with dynamic resolution (`--image-min-tokens`). Larger = sharper but heavier/slower; blank = not passed (llama reads the default from the model). Saved as a preset parameter
+- **KV not offloaded**: check "KV 不卸载到 GPU" to launch with `--no-kv-offload` — the KV cache stays in system memory, freeing VRAM for more model layers / a bigger context (handy for MoE models or tight VRAM); off by default. Saved as a preset parameter
 - **llama path**: defaults to `llama-server.exe` next to the program; a different path can be set globally in Settings (not part of presets)
 - **API address**: after startup, the model name and `http://127.0.0.1:<port>` endpoints are shown persistently above the log
 
@@ -65,6 +70,13 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.8.0 (2026-08-18) New + changed + polish:
+  - New: "图像 Min Tokens" under the multimodal option (`--image-min-tokens`) — minimum tokens per image for vision models with dynamic resolution; blank = llama reads the default from the model; saved as a preset parameter
+  - New: preset parameter "KV 不卸载到 GPU" (`--no-kv-offload`) — keeps the KV cache in system memory, freeing VRAM for more model layers / a bigger context (handy for MoE models or tight VRAM); off by default
+  - New: Settings → Batch manage presets now has an "导出选中" (export selected) button between "取消全选" and "关闭" — exports the checked presets to a JSON you can re-import
+  - Changed: model category rework — removed "未指定" (unspecified now means "通用/general"), added "编程" (programming) and "Agent" categories (each with its own temperature/output defaults)
+  - Polish: auto-compute — when a model is bigger than VRAM it partial-offloads the layers that fit (read from GGUF metadata; MoE benefits most) instead of falling back to pure CPU; KV bytes/token now read precisely from GGUF metadata (heuristic 0.5GB/4K only as fallback), so context estimates are more accurate
+  - Fix: the projector-file dropdown no longer blows up to ~1000px on a long filename (its default dynamic resizing did) — same treatment as the GPU dropdown: dynamic resizing off + capped width with truncation, full filename stays visible in the small hint / tooltip
 - v1.7.0 (2026-08-17) New + changed + fix + polish:
   - New: a default-port setting in Settings (blank = llama's 8080); clicking "compute defaults" with no preset no longer overwrites the port — it keeps your current value, falling back to the default port when unset
   - New: Settings → Model list now shows every .gguf in models/ including mmproj projector files (marked at the end of the row and counted in the total); the model dropdown still won't treat mmproj files as selectable models

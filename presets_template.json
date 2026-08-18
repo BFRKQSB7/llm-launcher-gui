@@ -46,9 +46,15 @@
       // 多模态：true=带 --mmproj，自动加载 models/ 里匹配的 mmproj 投影文件。
       // Qwen2.5-VL / LLaVA / MiniCPM-V 等视觉模型用。缺省 = 关
       "mm": false,
+      // 图像最小 Token（--image-min-tokens）：视觉模型（动态分辨率）每个图像最少生成的 token 数。
+      // 值越大图像越清晰、越占显存/越慢；越小越省。留空/删除 = 不传（llama 从模型读取默认）
+      "image_min_tokens": "",
       // Gemma 模型：true=带 --chat-template-file（需同目录 gemma_chat_template.jinja）。
       // 缺省 = 按文件名自动判断（含 gemma 的模型自动开）
-      "gemma": false
+      "gemma": false,
+      // KV 不卸载到 GPU（--no-kv-offload）：true=KV 缓存留在系统内存，腾出显存给更多模型层/更大上下文
+      // （MoE 模型、显存紧张时用）。缺省 = false（KV 在显存，速度最快）
+      "no_kv_offload": false
     }
   }
   // 更多模型只需照着再加一个顶层键：

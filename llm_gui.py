@@ -41,9 +41,11 @@
 #       row0 上下文长度(col0) / Flash(col2) | row1 并行请求 / 温度(col2)
 #       row2 GPU层数(col0) / 最大输出(col2) | row3 KV缓存 / 思考模式(col2)
 #       row4 top-p(col0) / 推理预算(col2) | row5 端口(col0) / 多模态+投影文件(col2)
-#       row6 监听地址(col0) / Gemma(col2) | row7 显卡(col0) | row8 批处理大小(col0)
+#       row6 监听地址(col0) / 图像 Min Tokens(col2) | row7 显卡(col0) / Gemma(col2)
+#       row8 批处理大小(col0) / KV 不卸载(col2) | row9 CORS(col0)
 #     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 左列 row2 起、右列 row0 起（右列与左列顶部对齐）；
-#     思考模式(row3,2)、推理预算(row4,2)、多模态+投影文件(row5,2)、Gemma(row6,2) 为硬编码，增删 PARAMS 项后须手动检查
+#     思考模式(row3,2)、推理预算(row4,2)、多模态+投影文件(row5,2)、图像 Min Tokens(row6,2)、
+#     Gemma(row7,2)、KV 不卸载(row8,2) 为硬编码，增删 PARAMS 项后须手动检查
 #   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
 #     refresh_models（⟳ 按钮，异步重扫 models/，保留当前选中；期间按钮禁用）→ 检索「def refresh_models」
 #     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
@@ -63,7 +65,7 @@
 #   - 日志/服务信息：append_log / clear_log / update_svc_info / _set_svc_idle / _svc_*
 #   - 弹窗：open_settings / confirm_overwrite / _import_conflict_dialog / manage_* 等
 # ================================================================================
-import json, os, queue, re, socket, subprocess, sys, threading, traceback, webbrowser
+import json, os, queue, re, socket, struct, subprocess, sys, threading, traceback, webbrowser
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
@@ -86,6 +88,9 @@ JINJA = os.path.join(BASE, 'gemma_chat_template.jinja')
 CTX_PRESETS = {'4K': 4096, '8K': 8192, '12K': 12288, '16K': 16384, '24K': 24576, '32K': 32768, '48K': 49152, '64K': 65536}
 PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
+# 模型定位：用户未指定 = 通用（旧「未指定」已删除）；新增 编程 / Agent
+CATEGORIES = ['通用', '聊天', '翻译', '角色扮演', '文学创作', '编程', 'Agent']
+
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
 DEFAULT_SASH_POS = 537   # 参数区/日志区默认分割位置（用户当前窗口状态）
@@ -98,13 +103,15 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
 _SRC_MAX = 10   # 参数来源标识最大显示字符数；超出截断 + 完整内容进悬浮提示（防顶宽）
 GPU_BOX_PAD = 58   # 显卡下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
 GPU_BOX_MAX = 180  # 显卡下拉逻辑宽度上限：保证右侧「检查配置」按钮不被压缩顶没（rowg 最大 180+8+68=256 < col1 最小 ~284）
+MMPROJ_BOX_PAD = 58   # 投影文件下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
+MMPROJ_BOX_MAX = 240  # 投影文件下拉逻辑宽度上限：默认 dynamic_resizing=True 会被长文件名撑到近千 px（实测 958），关闭后按本函数自适应、超宽截断，全名见右侧小字/悬浮提示
 
 
 def _lan_ip():
@@ -298,6 +305,90 @@ def detect_vram_gb():
     return 0
 
 
+# ---------- GGUF 元数据解析（只读文件头，供自动计算精确估 KV/层数） ----------
+
+def _read_gguf_val(f, vtype):
+    """按 GGUF spec 读一个元数据值；字符串/数组递归。类型码：8=string、9=array、0~7/10~12=数字。"""
+    if vtype == 8:
+        n = struct.unpack('<Q', f.read(8))[0]
+        return f.read(n).decode('utf-8', 'replace')
+    if vtype == 9:
+        et = struct.unpack('<I', f.read(4))[0]
+        cnt = struct.unpack('<Q', f.read(8))[0]
+        return [_read_gguf_val(f, et) for _ in range(min(cnt, 1000000))]
+    if vtype == 0: return struct.unpack('<B', f.read(1))[0]
+    if vtype == 1: return struct.unpack('<b', f.read(1))[0]
+    if vtype == 2: return struct.unpack('<H', f.read(2))[0]
+    if vtype == 3: return struct.unpack('<h', f.read(2))[0]
+    if vtype == 4: return struct.unpack('<I', f.read(4))[0]
+    if vtype == 5: return struct.unpack('<i', f.read(4))[0]
+    if vtype == 6: return struct.unpack('<f', f.read(4))[0]
+    if vtype == 7: return bool(struct.unpack('<B', f.read(1))[0])
+    if vtype == 10: return struct.unpack('<Q', f.read(8))[0]
+    if vtype == 11: return struct.unpack('<q', f.read(8))[0]
+    if vtype == 12: return struct.unpack('<d', f.read(8))[0]
+    raise ValueError(vtype)
+
+
+def read_gguf_meta(path):
+    """解析 GGUF 文件头元数据（magic+版本+KV 表，不读权重）。异常/非 GGUF 返回 None。"""
+    try:
+        with open(path, 'rb') as f:
+            if f.read(4) != b'GGUF':
+                return None
+            struct.unpack('<I', f.read(4))   # version
+            struct.unpack('<Q', f.read(8))   # tensor count（不需读 tensor info）
+            n_kv = struct.unpack('<Q', f.read(8))[0]
+            meta = {}
+            for _ in range(min(n_kv, 10000)):
+                klen = struct.unpack('<Q', f.read(8))[0]
+                if klen > 1 << 20:   # 防御异常大 key
+                    return None
+                key = f.read(klen).decode('utf-8', 'replace')
+                meta[key] = _read_gguf_val(f, struct.unpack('<I', f.read(4))[0])
+            return meta
+    except Exception:
+        return None
+
+
+def read_model_arch(path):
+    """从 GGUF 元数据提取架构参数：{n_layers, kv_per_token, is_moe}。
+    kv_per_token = q8_0 KV 缓存每 token 字节数（2×层×KV头×头维，MLA 用压缩维）。
+    读不到返回 None（调用方用启发式兜底）。"""
+    meta = read_gguf_meta(path)
+    if not meta:
+        return None
+
+    def get(*suffixes):
+        for k, v in meta.items():
+            if k.endswith(suffixes):
+                return v
+        return None
+
+    n_layers = get('.block_count')
+    n_kv = get('.attention.head_count_kv') or get('.attention.head_count')
+    key_len = get('.attention.key_length')
+    val_len = get('.attention.value_length')
+    n_heads = get('.attention.head_count')
+    n_embd = get('.embedding_length')
+    kv_lora = get('.attention.kv_lora_rank')
+    qk_rope = get('.attention.qk_rope_head_dim')
+    n_experts = get('.expert_count')
+    if not n_layers:
+        return None
+    if kv_lora:   # MLA 模型（DeepSeek V2/V3 等）：K 压缩 + 旋转、V 压缩
+        kv_per_token = n_layers * (2 * kv_lora + (qk_rope or 0))
+    else:
+        head_dim = key_len or val_len
+        if head_dim is None and n_embd and n_heads:
+            head_dim = n_embd // n_heads
+        if not (n_kv and head_dim):
+            return None
+        kv_per_token = 2 * n_layers * n_kv * head_dim   # q8_0 ≈ 1 字节/元素
+    return {'n_layers': n_layers, 'kv_per_token': kv_per_token,
+            'is_moe': bool(n_experts and n_experts > 1)}
+
+
 class ToolTip:
     """悬浮提示：Label 直接 place 在主窗口上（无独立 Toplevel/置顶窗口，
     不会飘到别的窗口上残留）。轮询隐藏 + 10s 硬超时 + 窗口失活即隐藏。"""
@@ -450,7 +541,7 @@ class App(ctk.CTk):
         ToolTip(self.refresh_btn, '刷新模型列表：重新扫描 models/ 目录下的模型文件')
         self.refresh_btn.grid(row=0, column=1, padx=(6, 0))
         ctk.CTkLabel(self.top_frame, text='模型定位').grid(row=0, column=2, padx=(20, 6), pady=6)
-        self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=['未指定', '聊天', '通用', '翻译', '角色扮演', '文学创作'], width=110,
+        self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=CATEGORIES, width=110,
                                          command=lambda _: self.on_category_change())
         self.cat_sel.grid(row=0, column=3, padx=6, pady=6, sticky='w')
         self.compute_btn = ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults(force=True))
@@ -584,7 +675,8 @@ class App(ctk.CTk):
         self.mm_chk = ctk.CTkCheckBox(rowmm, text='多模态', command=self.on_mm_toggle)
         self.mm_chk.grid(row=0, column=0, sticky='w')
         ToolTip(self.mm_chk, '视觉/多模态模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 --mmproj，自动在 models/ 里按文件名匹配投影文件（也可用旁边下拉手动指定）。默认关，存为预设参数。')
-        self.mmproj_sel = ctk.CTkOptionMenu(rowmm, values=['（自动）'], width=100, command=lambda _: self.on_mmproj_pick())
+        self.mmproj_sel = ctk.CTkOptionMenu(rowmm, values=['（自动）'], width=100, dynamic_resizing=False,
+                                            command=lambda _: self.on_mmproj_pick())
         self.mmproj_sel.grid(row=0, column=1, sticky='w', padx=(8, 0))
         ToolTip(self.mmproj_sel, '当前模型用的多模态投影文件（--mmproj）。「（自动）」= 按文件名自动匹配（右侧小字显示自动选中谁）；选具体文件 = 手动指定，按模型记住。自动匹配不到时启动会在日志提示。')
         self.mmproj_hint = tk.Label(rowmm, text='', fg='#9fd6a5', bg='#2b2b2b',
@@ -592,10 +684,19 @@ class App(ctk.CTk):
         self.mmproj_hint.grid(row=0, column=2, sticky='ew', padx=(8, 0))
         self._mmproj_hint_tt = ToolTip(self.mmproj_hint, '')
 
-        # Gemma 模型（可选勾选，替代仅按文件名判断；在多模态下方一格）
+        # 图像 Min Tokens（--image-min-tokens）：视觉模型动态分辨率下每个图像最少 token 数（多模态下方）
+        self.w_image_min_tokens = ctk.CTkEntry(pf, width=170, placeholder_text='留空=llama 默认')
+        add_pair(6, 2, '图像 Min Tokens', '视觉/多模态模型（动态分辨率）每个图像最少生成的 token 数（--image-min-tokens）。值越小图像细节越少、越省显存/越快；越大越清晰、越占显存。留空=不传（llama 从模型读取默认）。存为预设参数。', self.w_image_min_tokens)
+
+        # Gemma 模型（可选勾选，替代仅按文件名判断；多模态/图像 Min Tokens 下方一格）
         self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=6, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        self.gemma_chk.grid(row=7, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
         ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。存为预设参数；预设未指定时按文件名自动判断（可在设置里按模型覆盖）。')
+
+        # KV 不卸载到 GPU（--no-kv-offload）：默认关；勾选后 KV 留系统内存，腾显存给模型层/上下文
+        self.no_kv_chk = ctk.CTkCheckBox(pf, text='KV 不卸载到 GPU', command=self.on_no_kv_toggle)
+        self.no_kv_chk.grid(row=8, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(self.no_kv_chk, '勾选 = 启动带 --no-kv-offload：KV 缓存不卸载到 GPU（留在系统内存），腾出显存给更多模型层或更大上下文——MoE 模型、显存紧张时用。默认不勾选（KV 在显存，速度最快）。存为预设参数。')
 
         self.bar = ctk.CTkFrame(self)
         self.bar.grid(row=2, column=0, sticky='ew', padx=12, pady=6)
@@ -643,7 +744,7 @@ class App(ctk.CTk):
             menu.configure(command=handler)
 
         for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch,
-                  self.w_reasoning_budget, self.mmproj_sel, self.w_cors]:
+                  self.w_reasoning_budget, self.mmproj_sel, self.w_cors, self.w_image_min_tokens]:
             if isinstance(w, ctk.CTkEntry):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
@@ -788,6 +889,10 @@ class App(ctk.CTk):
         checked = bool(self.mm_chk.get())
         self.append_log(f'>>> 多模态：{"开" if checked else "关"}（存为预设时随预设一起保存）')
 
+    def on_no_kv_toggle(self):
+        checked = bool(self.no_kv_chk.get())
+        self.append_log(f'>>> KV 不卸载到 GPU：{"开" if checked else "关"}（存为预设时随预设一起保存）')
+
     def refresh_mmproj_menu(self):
         """重建「投影文件」下拉（含 models/ 里全部 mmproj 文件）并恢复当前模型记忆的选择。"""
         files = []
@@ -798,6 +903,7 @@ class App(ctk.CTk):
         self.mmproj_sel.configure(values=vals)
         saved = self.cfg.get('mmproj', {}).get(self.current_model or '', '（自动）')
         self.mmproj_sel.set(saved if saved in vals else '（自动）')
+        self._size_mmproj_box()
         self.update_mmproj_hint()
 
     def on_mmproj_pick(self):
@@ -809,6 +915,7 @@ class App(ctk.CTk):
             save_cfg(self.cfg)
             if v != '（自动）':
                 self.append_log(f'>>> {m} 的 mmproj 已手动指定：{v}')
+        self._size_mmproj_box()
         self.update_mmproj_hint()
 
     def update_mmproj_hint(self):
@@ -835,44 +942,75 @@ class App(ctk.CTk):
             self._mmproj_hint_tt.lab.configure(text='自动未匹配到合适的投影文件，可手动指定')
 
     def get_category(self, model):
-        return self.cfg.get('categories', {}).get(model, '未指定')
+        # 用户未指定 → 通用（旧「未指定」定位已删除，存量数据里的值统一回落通用）
+        cat = self.cfg.get('categories', {}).get(model)
+        return cat if cat in CATEGORIES else '通用'
 
     def set_category(self, model, cat):
         self.cfg.setdefault('categories', {})[model] = cat
         save_cfg(self.cfg)
 
     def compute_defaults(self, model, category, cur_port=''):
+        """按本机显存 + 模型大小（+ GGUF 架构元数据）自动计算默认参数。返回 (params, 说明)。
+        - 模型整体装得下 → ngl=999，按剩余显存 ÷ KV每token 精确算上下文
+        - 模型大于显存 → 部分卸载（能装下的层数进 GPU，MoE 尤其受益），比纯 CPU 快很多
+        - KV 每 token 字节数优先从 GGUF 元数据算（q8_0=1 字节/元素），读不到用 0.5GB/4K 启发式"""
         vram_gb = self.get_vram_gb()
+        path = os.path.join(MODELS_DIR, model)
         try:
-            model_gb = os.path.getsize(os.path.join(MODELS_DIR, model)) / (1024 ** 3)
+            model_gb = os.path.getsize(path) / (1024 ** 3)
         except Exception:
             model_gb = 0
-        if vram_gb > 0 and model_gb > 0 and model_gb + 1.5 <= vram_gb:
-            ngl = 999
-            kv_budget = max(1.0, vram_gb - model_gb - 1.5)
-            ctx = int(kv_budget / 0.5) * 4096   # 每 4K 上下文约 0.5GB KV（q8_0 估算）
-            ctx = max(2048, min(65536, ctx))
-        else:
-            ngl = 0
-            ctx = 32768                          # 模型装不进显存 → CPU 跑
+        arch = read_model_arch(path)
+        kv_per_token = arch['kv_per_token'] if arch else 0
+        if not kv_per_token:
+            kv_per_token = int(0.5 * (1024 ** 3) / 4096)   # 启发式兜底：0.5GB/4K（q8_0 粗估）
+        reserve = 1.5   # 预留显存：计算缓冲 / 激活 / 碎片
+        ngl, ctx = 0, 32768
+        detail = '（缺显存/模型信息，回退保守参数）'
+        if vram_gb > 0 and model_gb > 0:
+            if model_gb + reserve <= vram_gb:
+                ngl = 999
+                kv_budget = max(0.5, vram_gb - model_gb - reserve)
+                ctx = int(kv_budget * (1024 ** 3) / kv_per_token)
+                ctx = max(2048, min(65536, ctx))
+                detail = f'模型 {model_gb:.1f}G 可整体进显存，KV 预算 {kv_budget:.1f}G'
+            else:
+                # 模型 > 显存：部分卸载。目标 ctx 下 KV 随层均分 GPU，算能装下的层数
+                nl = arch['n_layers'] if arch else 0
+                target_ctx = 8192
+                if nl and nl > 1:
+                    kv_gb = target_ctx * kv_per_token / (1024 ** 3)
+                    denom = model_gb + kv_gb + reserve
+                    frac = (vram_gb - reserve) / denom if denom > 0 else 0
+                    frac = min(0.999, max(0.05, frac))
+                    ngl = max(1, min(int(frac * nl), nl - 1))
+                    ctx = target_ctx
+                    detail = f'模型 {model_gb:.1f}G > 显存 {vram_gb:.1f}G，部分卸载 {ngl}/{nl} 层'
+                    if arch['is_moe']:
+                        detail += '（MoE，KV 小、卸载效率高）'
+                else:
+                    detail = f'模型 {model_gb:.1f}G > 显存 {vram_gb:.1f}G，无法读层数，回退纯 CPU'
         cat = {
-            '未指定':   {'temp': 0.5,  'top_p': 0.9,  'n_predict': 2048},
             '聊天':     {'temp': 0.7,  'top_p': 0.9,  'n_predict': 1024},
             '通用':     {'temp': 0.6,  'top_p': 0.9,  'n_predict': 2048},
             '翻译':     {'temp': 0.2,  'top_p': 0.8,  'n_predict': 4096},
             '角色扮演': {'temp': 0.8,  'top_p': 0.95, 'n_predict': 1024},
             '文学创作': {'temp': 0.75, 'top_p': 0.95, 'n_predict': 2048},
+            '编程':     {'temp': 0.2,  'top_p': 0.9,  'n_predict': 4096},
+            'Agent':    {'temp': 0.3,  'top_p': 0.9,  'n_predict': 2048},
         }.get(category, {'temp': 0.5, 'top_p': 0.9, 'n_predict': 2048})
         if self.is_gemma(model):
             # Gemma 特适配：低温度 + 长输出（需 --chat-template-file）
             cat = {'temp': 0.1, 'top_p': 0.9, 'n_predict': 4096}
         # 端口不随自动计算覆盖：保留当前输入；未设则用设置里的默认端口（兜底 llama 默认 8080）
         port = cur_port or str(self.cfg.get('default_port') or 8080)
-        return {'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
-                'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
-                'parallel': 1, 'port': port, 'host': '127.0.0.1',
-                'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
-                'mm': False, 'cors': ''}
+        return ({'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
+                 'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
+                 'parallel': 1, 'port': port, 'host': '127.0.0.1',
+                 'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
+                 'mm': False, 'cors': '', 'image_min_tokens': '', 'no_kv_offload': False},
+                detail)
 
     def _poll_q(self):
         # 主线程轮询工作线程结果（tkinter 的 after 不能从子线程调）
@@ -884,12 +1022,12 @@ class App(ctk.CTk):
             try:
                 kind = item[0]
                 if kind == 'params':
-                    _, model, cat, params, vram, force = item
+                    _, model, cat, params, vram, force, detail = item
                     self._save_computed_defaults(model, params)
                     if self.current_model == model and (force or not self._preset_locked):
                         self.set_params(params)
-                        self._set_param_src('⚡ 自动计算', '#8ab4f8', tip=f'{vram}G 显存 + 模型大小 自动计算')
-                        self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）')
+                        self._set_param_src('⚡ 自动计算', '#8ab4f8', tip=f'{vram}G 显存 + 模型大小 自动计算\n{detail}')
+                        self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）：{detail}')
                 elif kind == 'gpus':
                     _, gpus = item
                     self._apply_gpus(gpus)
@@ -954,8 +1092,8 @@ class App(ctk.CTk):
 
         def work():
             try:
-                params = self.compute_defaults(model, cat, cur_port)
-                self._q.put(('params', model, cat, params, self.get_vram_gb(), force))
+                params, detail = self.compute_defaults(model, cat, cur_port)
+                self._q.put(('params', model, cat, params, self.get_vram_gb(), force, detail))
             except Exception as e:
                 self._q.put(('error', f'计算默认参数失败: {e}'))
 
@@ -1050,6 +1188,7 @@ class App(ctk.CTk):
         set_entry(self.w_n_batch, p.get('n_batch'))
         set_entry(self.w_cors, p.get('cors'))   # CORS 缺省=留空=不传
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
+        set_entry(self.w_image_min_tokens, p.get('image_min_tokens'))
         if p.get('thinking', True):
             self.think_chk.select()
         else:
@@ -1059,6 +1198,7 @@ class App(ctk.CTk):
             gemma = self.is_gemma(self.current_model or '')
         self.gemma_chk.select() if gemma else self.gemma_chk.deselect()
         self.mm_chk.select() if p.get('mm') else self.mm_chk.deselect()
+        self.no_kv_chk.select() if p.get('no_kv_offload') else self.no_kv_chk.deselect()
         self.update_calc()
         self.update_host_hint()
         self.sync_ctx_preset()
@@ -1095,9 +1235,11 @@ class App(ctk.CTk):
             'n_batch': self.w_n_batch.get().strip(),
             'cors': self.w_cors.get().strip(),
             'reasoning_budget': intv('推理预算', self.w_reasoning_budget.get().strip()),
+            'image_min_tokens': intv('图像 Min Tokens', self.w_image_min_tokens.get().strip()),
             'thinking': bool(self.think_chk.get()),
             'gemma': bool(self.gemma_chk.get()),
             'mm': bool(self.mm_chk.get()),
+            'no_kv_offload': bool(self.no_kv_chk.get()),
         }
         return p
 
@@ -1172,6 +1314,21 @@ class App(ctk.CTk):
             w = min(max(int(tw / self._get_window_scaling()) + GPU_BOX_PAD, 90), GPU_BOX_MAX)
             if w != self.gpu_sel._desired_width:
                 self.gpu_sel.configure(width=w)
+        except Exception:
+            pass
+
+    def _size_mmproj_box(self):
+        """投影文件下拉按当前文本自适应宽度（'（自动）' 短框、长文件名封顶 MMPROJ_BOX_MAX）。
+        下拉 dynamic_resizing 已关，超宽文本自动截断，全名见右侧小字提示。参考显卡下拉 _size_gpu_box。"""
+        try:
+            f = tkfont.Font(font=self.mmproj_sel._text_label.cget('font'))
+            tw = f.measure(self.mmproj_sel.get())
+        except Exception:
+            tw = 0
+        try:
+            w = min(max(int(tw / self._get_window_scaling()) + MMPROJ_BOX_PAD, 100), MMPROJ_BOX_MAX)
+            if w != self.mmproj_sel._desired_width:
+                self.mmproj_sel.configure(width=w)
         except Exception:
             pass
 
@@ -1475,9 +1632,30 @@ class App(ctk.CTk):
         ctk.CTkButton(bar, text='全选', width=70, command=lambda: set_all(True)).pack(side='left', padx=4)
         ctk.CTkButton(bar, text='反选', width=70, command=invert).pack(side='left', padx=4)
         ctk.CTkButton(bar, text='取消全选', width=90, command=lambda: set_all(False)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, text='导出选中', width=90, fg_color='#3d6e5a', hover_color='#477a66',
+                      command=lambda: self.export_selected_presets(dlg)).pack(side='left', padx=4)
         ctk.CTkButton(bar, text='删除选中', width=90, fg_color='#8a3f3f', hover_color='#9a4848',
                       command=lambda: self.delete_selected_presets(dlg)).pack(side='right', padx=4)
         ctk.CTkButton(bar, text='关闭', width=70, command=dlg.destroy).pack(side='right', padx=4)
+
+    def export_selected_presets(self, dlg):
+        """批量管理：把勾选的预设导出为 JSON（与 llm_presets.json 同构，可再导入）。"""
+        sel = [(m, n) for (m, n), chk in self._preset_chks.items() if chk.get()]
+        if not sel:
+            messagebox.showinfo('导出预设', '未勾选任何预设', parent=dlg)
+            return
+        target = {}
+        for m, n in sel:
+            if m in self.presets and isinstance(self.presets[m], dict) and n in self.presets[m]:
+                target.setdefault(m, {})[n] = self.presets[m][n]
+        path = filedialog.asksaveasfilename(parent=dlg, title='导出选中预设', defaultextension='.json',
+                                            initialfile='presets_selected.json', filetypes=[('JSON', '*.json')])
+        if not path:
+            return
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(target, f, ensure_ascii=False, indent=2)
+        n_presets = sum(len(v) for v in target.values())
+        self.append_log(f'>>> 已导出 {n_presets} 条选中预设到 {path}')
 
     def delete_selected_presets(self, dlg):
         sel = [(m, n) for (m, n), chk in self._preset_chks.items() if chk.get()]
@@ -1824,6 +2002,10 @@ class App(ctk.CTk):
             args += ['--batch-size', str(p['n_batch'])]
         if val(p.get('reasoning_budget')):
             args += ['--reasoning-budget', str(p['reasoning_budget'])]
+        if val(p.get('image_min_tokens')):
+            args += ['--image-min-tokens', str(p['image_min_tokens'])]
+        if p.get('no_kv_offload'):
+            args += ['--no-kv-offload']
         args += ['--reasoning', 'on' if p.get('thinking', True) else 'off']
         gemma = p.get('gemma')
         if gemma is None:
