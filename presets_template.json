@@ -49,8 +49,16 @@
       // 图像最小 Token（--image-min-tokens）：视觉模型（动态分辨率）每个图像最少生成的 token 数。
       // 值越大图像越清晰、越占显存/越慢；越小越省。留空/删除 = 不传（llama 从模型读取默认）
       "image_min_tokens": "",
+      // min-p 采样（--min-p）：按最高候选概率动态缩放过滤，比 top-p 更顺滑。0=关。留空 = 不传（llama 默认 0.05）
+      "min_p": "",
+      // 模板额外参数（--chat-template-kwargs）：给 Jinja 模板传额外 JSON 对象字符串，必须合法，如 {"enable_thinking":false}。
+      // 对 Qwen3 系可真正关闭思考（模板级，比 --reasoning off 更直接）；对不读该变量的模型无效。留空 = 不传
+      "chat_template_kwargs": "",
+      // 思考格式（--reasoning-format）：控制思考内容在 API 返回里的呈现。none=留在 content / deepseek=进 reasoning_content /
+      // deepseek-legacy=保留 <think> 同时进 reasoning_content / auto=自动。留空 = 不传（llama 默认 auto）
+      "reasoning_format": "",
       // Gemma 模型：true=带 --chat-template-file（需同目录 gemma_chat_template.jinja）。
-      // 缺省 = 按文件名自动判断（含 gemma 的模型自动开）
+      // 默认关——只有旧版 Gemma（gemma-2b/7b、translategemma 等）需要；gemma3/4 自带模板、无需勾选
       "gemma": false,
       // KV 不卸载到 GPU（--no-kv-offload）：true=KV 缓存留在系统内存，腾出显存给更多模型层/更大上下文
       // （MoE 模型、显存紧张时用）。缺省 = false（KV 在显存，速度最快）

@@ -40,12 +40,13 @@
 #   - 参数区网格行号表（CTkScrollableFrame；改布局先看这）：
 #       row0 上下文长度(col0) / Flash(col2) | row1 并行请求 / 温度(col2)
 #       row2 GPU层数(col0) / 最大输出(col2) | row3 KV缓存 / 思考模式(col2)
-#       row4 top-p(col0) / 推理预算(col2) | row5 端口(col0) / 多模态+投影文件(col2)
-#       row6 监听地址(col0) / 图像 Min Tokens(col2) | row7 显卡(col0) / Gemma(col2)
-#       row8 批处理大小(col0) / KV 不卸载(col2) | row9 CORS(col0)
+#       row4 top-p(col0) / 推理预算(col2) | row5 端口(col0) / 思考格式(col2)
+#       row6 监听地址(col0) / 多模态+投影文件(col2) | row7 显卡(col0) / 图像 Min Tokens(col2)
+#       row8 批处理大小(col0) / Gemma(col2) | row9 CORS(col0) / KV 不卸载(col2)
+#       row10 min-p(col0) | row11 模板额外参数(col0)
 #     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 左列 row2 起、右列 row0 起（右列与左列顶部对齐）；
-#     思考模式(row3,2)、推理预算(row4,2)、多模态+投影文件(row5,2)、图像 Min Tokens(row6,2)、
-#     Gemma(row7,2)、KV 不卸载(row8,2) 为硬编码，增删 PARAMS 项后须手动检查
+#     思考模式(row3,2)、推理预算(row4,2)、思考格式(row5,2)、多模态+投影文件(row6,2)、图像 Min Tokens(row7,2)、
+#     Gemma(row8,2)、KV 不卸载(row9,2)、min-p(row10,0)、模板额外参数(row11,0) 为硬编码，增删 PARAMS 项后须手动检查
 #   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
 #     refresh_models（⟳ 按钮，异步重扫 models/，保留当前选中；期间按钮禁用）→ 检索「def refresh_models」
 #     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
@@ -103,7 +104,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.8.0'
+VERSION = '1.9.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -457,6 +458,9 @@ class App(ctk.CTk):
         self.current_model = None
         self.presets = load_presets()
         self.cfg = load_cfg()
+        # 模型文件夹可自定义（空=程序同目录 models）；其余文件（presets/config/llama.exe/JINJA）仍留程序目录
+        global MODELS_DIR
+        MODELS_DIR = self.cfg.get('models_dir') or os.path.join(BASE, 'models')
         ws = self.cfg.get('window_size')
         if self.cfg.get('remember_size', True) and isinstance(ws, list) and len(ws) == 2:
             try:
@@ -623,6 +627,10 @@ class App(ctk.CTk):
         self.w_reasoning_budget = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不限')
         add_pair(4, 2, '推理预算', '推理模型在「思考」阶段最多花费的 token（--reasoning-budget）。-1=不限，0=立即结束思考，N=预算。留空=不传（llama 默认 -1 不限）。', self.w_reasoning_budget)
 
+        # 思考格式（--reasoning-format）：控制思考内容在 API 返回里的呈现（配思考模式用）
+        self.w_reasoning_format = ctk.CTkOptionMenu(pf, values=['（默认）', 'auto', 'none', 'deepseek', 'deepseek-legacy'], width=170)
+        add_pair(5, 2, '思考格式', '控制思考内容在 API 返回里怎么呈现（--reasoning-format）。none=思考留在 message.content；deepseek=进 message.reasoning_content；deepseek-legacy=保留 <think> 标签同时进 reasoning_content；auto=自动。留空=不传（llama 默认 auto）。配「思考模式」用。', self.w_reasoning_format)
+
         # 监听地址 + 提示
         base = r + (len(simple) + 1) // 2
         lab = ctk.CTkLabel(pf, text='监听地址', anchor='w', width=110)
@@ -663,6 +671,14 @@ class App(ctk.CTk):
         self.w_cors = ctk.CTkEntry(pf, width=220, placeholder_text='* 或 http://localhost:3000')
         self.w_cors.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
 
+        # min-p 采样（--min-p）：动态按最高候选概率缩放过滤，比 top-p 更顺滑
+        self.w_min_p = ctk.CTkEntry(pf, width=170, placeholder_text='留空=llama 默认 0.05')
+        add_pair(10, 0, 'min-p', 'min-p 采样（--min-p）。按当前最高候选概率动态缩放过滤阈值，比 top-p 更顺滑、少一刀切。越小越接近贪心，越大越多样；0=关（用 llama 默认 0.05）。留空=不传。', self.w_min_p)
+
+        # 模板额外参数（--chat-template-kwargs）：给 Jinja 模板传额外 JSON 对象参数
+        self.w_chat_template_kwargs = ctk.CTkEntry(pf, width=220, placeholder_text='如 {"enable_thinking":false}')
+        add_pair(11, 0, '模板额外参数', '给聊天模板传额外 JSON 参数（--chat-template-kwargs），必须是合法 JSON 对象字符串，如 {"enable_thinking":false}。对 Qwen3 系填 enable_thinking:false 可真正关闭思考（模板级，比 --reasoning off 更直接）；对不读该变量的模型无效。留空=不传。', self.w_chat_template_kwargs)
+
         # 思考模式开关（预设参数，默认开；on→--reasoning on，off→--reasoning off；Murasaki/Qwen3/DeepSeek 等推理模型用）
         self.think_chk = ctk.CTkCheckBox(pf, text='思考模式', command=self.on_thinking_toggle)
         self.think_chk.grid(row=3, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
@@ -670,7 +686,7 @@ class App(ctk.CTk):
 
         # 多模态 + 投影文件（同一行，跨两列宽度；文件名提示吃满剩余宽度，长名也尽量显示完整）
         rowmm = ctk.CTkFrame(pf, fg_color='transparent')
-        rowmm.grid(row=5, column=2, columnspan=2, sticky='ew', padx=(14, 14), pady=5)
+        rowmm.grid(row=6, column=2, columnspan=2, sticky='ew', padx=(14, 14), pady=5)
         rowmm.grid_columnconfigure(2, weight=1)
         self.mm_chk = ctk.CTkCheckBox(rowmm, text='多模态', command=self.on_mm_toggle)
         self.mm_chk.grid(row=0, column=0, sticky='w')
@@ -686,16 +702,16 @@ class App(ctk.CTk):
 
         # 图像 Min Tokens（--image-min-tokens）：视觉模型动态分辨率下每个图像最少 token 数（多模态下方）
         self.w_image_min_tokens = ctk.CTkEntry(pf, width=170, placeholder_text='留空=llama 默认')
-        add_pair(6, 2, '图像 Min Tokens', '视觉/多模态模型（动态分辨率）每个图像最少生成的 token 数（--image-min-tokens）。值越小图像细节越少、越省显存/越快；越大越清晰、越占显存。留空=不传（llama 从模型读取默认）。存为预设参数。', self.w_image_min_tokens)
+        add_pair(7, 2, '图像 Min Tokens', '视觉/多模态模型（动态分辨率）每个图像最少生成的 token 数（--image-min-tokens）。值越小图像细节越少、越省显存/越快；越大越清晰、越占显存。留空=不传（llama 从模型读取默认）。存为预设参数。', self.w_image_min_tokens)
 
         # Gemma 模型（可选勾选，替代仅按文件名判断；多模态/图像 Min Tokens 下方一格）
         self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=7, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.gemma_chk, 'Gemma 系列需要 --chat-template-file（gemma_chat_template.jinja），且建议低温度。存为预设参数；预设未指定时按文件名自动判断（可在设置里按模型覆盖）。')
+        self.gemma_chk.grid(row=8, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        ToolTip(self.gemma_chk, '旧版 Gemma（gemma-2b/7b、translategemma 等）需要外部 --chat-template-file（gemma_chat_template.jinja），且建议低温；新 gemma3/4 自带模板、无需勾选。默认关，勾过一次按模型记住；存为预设参数。')
 
         # KV 不卸载到 GPU（--no-kv-offload）：默认关；勾选后 KV 留系统内存，腾显存给模型层/上下文
         self.no_kv_chk = ctk.CTkCheckBox(pf, text='KV 不卸载到 GPU', command=self.on_no_kv_toggle)
-        self.no_kv_chk.grid(row=8, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
+        self.no_kv_chk.grid(row=9, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
         ToolTip(self.no_kv_chk, '勾选 = 启动带 --no-kv-offload：KV 缓存不卸载到 GPU（留在系统内存），腾出显存给更多模型层或更大上下文——MoE 模型、显存紧张时用。默认不勾选（KV 在显存，速度最快）。存为预设参数。')
 
         self.bar = ctk.CTkFrame(self)
@@ -744,7 +760,8 @@ class App(ctk.CTk):
             menu.configure(command=handler)
 
         for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch,
-                  self.w_reasoning_budget, self.mmproj_sel, self.w_cors, self.w_image_min_tokens]:
+                  self.w_reasoning_budget, self.w_reasoning_format, self.mmproj_sel, self.w_cors,
+                  self.w_image_min_tokens, self.w_min_p, self.w_chat_template_kwargs]:
             if isinstance(w, ctk.CTkEntry):
                 w.bind('<KeyRelease>', mark)
             elif isinstance(w, ctk.CTkOptionMenu):
@@ -859,10 +876,9 @@ class App(ctk.CTk):
         self.update_preset_controls()   # 刷新删预设按钮状态/颜色（自动应用预设后要变鲜艳）
 
     def is_gemma(self, model):
+        # 仅按用户勾选/预设；默认关（新 gemma3/4 自带模板无需外部 --chat-template-file）
         flags = self.cfg.get('gemma', {})
-        if model in flags:
-            return bool(flags[model])
-        return 'gemma' in model.lower()
+        return bool(flags.get(model, False))
 
     def on_gemma_toggle(self):
         m = self.current_model
@@ -1009,7 +1025,8 @@ class App(ctk.CTk):
                  'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
                  'parallel': 1, 'port': port, 'host': '127.0.0.1',
                  'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
-                 'mm': False, 'cors': '', 'image_min_tokens': '', 'no_kv_offload': False},
+                 'mm': False, 'cors': '', 'image_min_tokens': '', 'no_kv_offload': False,
+                 'min_p': '', 'chat_template_kwargs': '', 'reasoning_format': ''},
                 detail)
 
     def _poll_q(self):
@@ -1189,6 +1206,9 @@ class App(ctk.CTk):
         set_entry(self.w_cors, p.get('cors'))   # CORS 缺省=留空=不传
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         set_entry(self.w_image_min_tokens, p.get('image_min_tokens'))
+        set_entry(self.w_min_p, p.get('min_p'))
+        set_entry(self.w_chat_template_kwargs, p.get('chat_template_kwargs'))
+        set_menu(self.w_reasoning_format, p.get('reasoning_format'))
         if p.get('thinking', True):
             self.think_chk.select()
         else:
@@ -1236,6 +1256,9 @@ class App(ctk.CTk):
             'cors': self.w_cors.get().strip(),
             'reasoning_budget': intv('推理预算', self.w_reasoning_budget.get().strip()),
             'image_min_tokens': intv('图像 Min Tokens', self.w_image_min_tokens.get().strip()),
+            'min_p': fltv('min-p', self.w_min_p.get().strip()),
+            'chat_template_kwargs': self.w_chat_template_kwargs.get().strip(),
+            'reasoning_format': '' if self.w_reasoning_format.get() == '（默认）' else self.w_reasoning_format.get(),
             'thinking': bool(self.think_chk.get()),
             'gemma': bool(self.gemma_chk.get()),
             'mm': bool(self.mm_chk.get()),
@@ -1800,6 +1823,26 @@ class App(ctk.CTk):
 
         ctk.CTkButton(spf, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
 
+        # 模型文件夹（全局，留空=程序同目录 models）
+        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
+        ctk.CTkLabel(dlg, text='模型文件夹（全局，留空=程序同目录 models）',
+                     anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
+        mdf = ctk.CTkFrame(dlg, fg_color='transparent')
+        mdf.pack(padx=24, pady=(0, 6), fill='x')
+        md_entry = ctk.CTkEntry(mdf, placeholder_text='留空=程序同目录 models')
+        md_entry.pack(side='left', fill='x', expand=True)
+        md_entry.insert(0, self.cfg.get('models_dir', ''))
+
+        def browse_md():
+            cur = md_entry.get().strip()
+            init = cur if cur and os.path.isdir(cur) else BASE
+            p = filedialog.askdirectory(parent=dlg, title='选择模型文件夹', initialdir=init)
+            if p:
+                md_entry.delete(0, 'end')
+                md_entry.insert(0, p)
+
+        ctk.CTkButton(mdf, text='浏览…', width=70, command=browse_md).pack(side='left', padx=(6, 0))
+
         # 默认端口（全局）：无预设自动计算时保留当前端口；未设端口时用它兜底
         dpf = ctk.CTkFrame(dlg, fg_color='transparent')
         dpf.pack(padx=24, pady=(8, 6), fill='x')
@@ -1812,6 +1855,8 @@ class App(ctk.CTk):
             self.cfg['overwrite_ask'] = bool(ask.get())
             self.cfg['remember_size'] = bool(sizebox.get())
             self.cfg['server_path'] = sp_entry.get().strip()
+            md = md_entry.get().strip()
+            self.cfg['models_dir'] = md   # 空=默认程序同目录 models
             dp = dp_entry.get().strip()
             if dp:
                 try:
@@ -1823,6 +1868,11 @@ class App(ctk.CTk):
             else:
                 self.cfg.pop('default_port', None)
             save_cfg(self.cfg)
+            global MODELS_DIR
+            MODELS_DIR = md or os.path.join(BASE, 'models')
+            self.load_models()
+            self.refresh_mmproj_menu()
+            self.append_log('>>> 模型文件夹已切换：' + os.path.normpath(MODELS_DIR))
             dlg.destroy()
 
         # 保存按钮并入默认端口行（避免端口框过长、也省一整行高度）
@@ -1989,6 +2039,8 @@ class App(ctk.CTk):
             args += ['--temp', str(p['temp'])]
         if val(p.get('top_p')):
             args += ['--top-p', str(p['top_p'])]
+        if val(p.get('min_p')):
+            args += ['--min-p', str(p['min_p'])]
         if val(p.get('host')):
             args += ['--host', str(p['host'])]
         if val(p.get('port')):
@@ -2002,6 +2054,10 @@ class App(ctk.CTk):
             args += ['--batch-size', str(p['n_batch'])]
         if val(p.get('reasoning_budget')):
             args += ['--reasoning-budget', str(p['reasoning_budget'])]
+        if val(p.get('reasoning_format')):
+            args += ['--reasoning-format', str(p['reasoning_format'])]
+        if val(p.get('chat_template_kwargs')):
+            args += ['--chat-template-kwargs', str(p['chat_template_kwargs'])]
         if val(p.get('image_min_tokens')):
             args += ['--image-min-tokens', str(p['image_min_tokens'])]
         if p.get('no_kv_offload'):

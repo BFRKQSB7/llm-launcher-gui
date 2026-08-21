@@ -4,7 +4,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 > [English](docs/en/README.md)
 
-![](https://img.shields.io/badge/version-v1.8.0-blue)
+![](https://img.shields.io/badge/version-v1.9.0-blue)
 
 ## 特性
 
@@ -15,12 +15,14 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 - 思考模式开关：推理模型（Murasaki / Qwen3 / DeepSeek 等）可一键开关思考输出（`--reasoning on/off`），默认开，作为预设参数保存
 - 推理预算：限定推理模型在「思考」阶段最多花费的 token（`--reasoning-budget`），留空 = 不限
 - 多模态开关：视觉模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 `--mmproj`，自动按文件名匹配 `models/` 里的 mmproj 投影文件（多个时选最匹配的），也可用「投影文件」下拉手动指定（按模型记住）；mmproj 文件本身不作为可选模型列出
-- Gemma 模型选项：勾选后使用专用聊天模板并建议低温（预设参数，未指定时按文件名自动判断）
+- Gemma 模型选项：勾选后使用专用聊天模板并建议低温（预设参数，默认关；旧版 gemma 才需要，gemma3/4 自带模板）
 - 图像 Min Tokens：视觉模型（动态分辨率）可设每个图像最少 token 数（`--image-min-tokens`），位于多模态下方，留空 = llama 从模型读取默认
 - KV 缓存不卸载到 GPU：勾选后 KV 留在系统内存、腾显存给模型层/更大上下文（`--no-kv-offload`），MoE 模型或显存紧张时用；默认关
+- min-p 采样 / 思考格式 / 模板额外参数：min-p 按最高候选概率动态缩放、比 top-p 更顺滑；思考格式控制思考内容返回格式（none / deepseek / deepseek-legacy）；模板额外参数给 Jinja 传 JSON（Qwen3 系填 `{"enable_thinking":false}` 可真正关思考）
 - 自动计算：模型大于显存时自动部分卸载（按 GGUF 元数据装得下的层数进 GPU，MoE 尤其受益），不再一刀切纯 CPU
 - 所有参数可留空：空字段 = 不传给 llama-server，用 llama 自身默认值
 - llama-server.exe 路径为全局设置（「设置」里选择，留空用程序同目录）
+- 模型文件夹可自定义（「设置」里选择，留空用程序同目录 `models/`）
 - GPU 下拉（`nvidia-smi` 自动检测）；监听地址本机 / 局域网；KV 缓存精度档位
 - 实时日志 + 常驻显示模型名与 API 地址（含 `/v1/chat/completions` 等端点）
 - 单文件 exe，无需安装 Python
@@ -35,19 +37,21 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 2. 把 GGUF 模型放入程序同目录的 `models/` 子目录
 3. 运行 `LLMGUI.exe`，或直接用 Python 运行 `python llm_gui.py`
 
-> Gemma 模型需要 `gemma_chat_template.jinja`（已随仓库提供）。
+> 旧版 Gemma（gemma-2b/7b、translategemma 等）需要 `gemma_chat_template.jinja`（已随仓库提供）并勾选「Gemma 模型」；gemma3/4 自带模板、无需勾选。
 
 ## 使用说明
 
 - **预设**：选好模型和参数后点「存为预设」；每个模型可有多套预设（数据存本地 `llm_presets.json`，属个人文件，不入库）。所有可设置参数都存进预设（含思考模式 / Gemma），留空 = 不传给 llama-server 用默认值
 - **自动计算**：选「模型定位」后点「⚙ 计算默认」，程序按本机显存 + 模型大小算出 `ctx / ngl / temp…`（结果存本地 `llm_default_presets.json`，机器相关，不入库）
-- **Gemma 模型**：勾选参数区的「Gemma 模型」复选框，启动会带 `--chat-template-file` 且自动计算采用低温度；存为预设参数，未指定时按文件名自动判断
+- **Gemma 模型**：勾选参数区的「Gemma 模型」复选框，启动会带 `--chat-template-file` 且自动计算采用低温度；存为预设参数。默认关——只有旧版 Gemma（gemma-2b/7b、translategemma 等）需要勾，新 gemma3/4 自带模板、无需勾选
 - **思考模式**：参数区的「思考模式」默认开 → 启动带 `--reasoning on`（推理模型先思考再答，如 Murasaki 思维链 / Qwen3）；取消 → 带 `--reasoning off`（直出答案）。作为预设参数保存，预设省略时按开处理
 - **推理预算**：「思考模式」正下方的「推理预算」限定思考阶段最多花费的 token（`--reasoning-budget`）。`-1`=不限 / `0`=立即结束思考 / 正数=预算；留空 = 不传（llama 默认 -1 不限）
+- **min-p / 思考格式 / 模板额外参数**：参数区「min-p」补全采样（留空=llama 默认 0.05）；「思考格式」控制思考内容返回格式（`--reasoning-format`，配思考模式用，留空=auto）；「模板额外参数」填 `{"enable_thinking":false}` 可对 Qwen3 系真正关思考（`--chat-template-kwargs`，模板级、比 `--reasoning off` 更直接）。均作为预设参数保存，留空=不传
 - **多模态**：勾选参数区的「多模态」→ 启动带 `--mmproj`。投影文件默认「（自动）」按文件名匹配（单个直接用；多个时选最像的；找不到匹配会在日志提示），也可在「投影文件」下拉手动指定具体文件（按模型记住、优先于自动）。作为预设参数保存，默认关。`mmproj` 文件不作为可选模型列出
 - **图像 Min Tokens**：多模态正下方的「图像 Min Tokens」限定视觉模型（动态分辨率）每个图像最少生成的 token 数（`--image-min-tokens`）。值越大图像越清晰、越占显存/越慢；留空 = 不传（llama 从模型读取默认）。作为预设参数保存
 - **KV 不卸载**：参数区的「KV 不卸载到 GPU」勾选后启动带 `--no-kv-offload`——KV 缓存留在系统内存，腾出显存给更多模型层/更大上下文（MoE 模型、显存紧张时用）；默认关。作为预设参数保存
 - **llama 路径**：默认用程序同目录的 `llama-server.exe`；可在「设置」里选择其他路径（全局，不在预设里）
+- **模型文件夹**：默认用程序同目录 `models/`；可在「设置」里选择其他文件夹存放 GGUF 模型（全局，不在预设里），改后模型列表/mmproj/清单随之刷新
 - **API 地址**：启动后日志上方常驻显示 `http://127.0.0.1:<端口>` 与常用端点，方便接入翻译工具等
 
 ## 文件结构
@@ -72,6 +76,12 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## 变更日志
 
+- v1.9.0（2026-08-21）新增 + 修改：
+  - 新增：参数「min-p」（`--min-p`）——按最高候选概率动态缩放过滤、比 top-p 更顺滑，留空=llama 默认 0.05，存为预设参数
+  - 新增：参数「思考格式」（`--reasoning-format`）——控制思考内容在 API 返回里的格式（none / deepseek / deepseek-legacy / auto），配「思考模式」用，存为预设参数
+  - 新增：参数「模板额外参数」（`--chat-template-kwargs`）——给 Jinja 模板传额外 JSON 对象字符串；对 Qwen3 系填 `{"enable_thinking":false}` 可真正关闭思考（模板级、比 `--reasoning off` 更直接），存为预设参数
+  - 修改：Gemma 模板改纯手动——去掉按文件名自动判断（含 "gemma" 就自动开），默认关；只有旧版 Gemma（gemma-2b/7b、translategemma）需要勾选，新 gemma3/4 自带模板无需勾选；勾过一次按模型记住
+  - 新增：模型文件夹可自定义（「设置」里选择，留空=程序同目录 `models/`）——GGUF 模型可放在任意目录，改后模型列表/mmproj/清单随之刷新
 - v1.8.0（2026-08-18）新增 + 修改 + 优化：
   - 新增：多模态下方「图像 Min Tokens」（`--image-min-tokens`）——视觉模型（动态分辨率）每个图像最少生成的 token 数，留空 = llama 从模型读取默认，存为预设参数
   - 新增：预设参数「KV 不卸载到 GPU」（`--no-kv-offload`）——KV 缓存留在系统内存、腾显存给模型层/更大上下文（MoE 模型、显存紧张时用），默认关

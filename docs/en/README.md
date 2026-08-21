@@ -13,12 +13,14 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - Thinking mode toggle: reasoning models (Murasaki / Qwen3 / DeepSeek…) can turn thinking output on/off (`--reasoning on/off`), default on, saved as a preset parameter
 - Reasoning budget: limits how many tokens reasoning models spend in the "thinking" phase (`--reasoning-budget`), blank = unlimited
 - Multimodal toggle: vision models (Qwen2.5-VL / LLaVA / MiniCPM-V…) launch with `--mmproj`, auto-matching the mmproj projector file in `models/` by filename (picks the best when several), or you can pin one manually via the "投影文件" dropdown (remembered per model); mmproj files are not listed as selectable models
-- Gemma model option: uses the dedicated chat template and suggests a low temperature (a preset parameter; falls back to filename detection when omitted)
+- Gemma model option: uses the dedicated chat template and suggests a low temperature (a preset parameter; off by default — only old Gemma needs it, gemma3/4 ship their own template)
 - Image min tokens: vision models with dynamic resolution can set the minimum tokens per image (`--image-min-tokens`), right below the multimodal option; blank = llama reads the default from the model
 - KV not offloaded to GPU: check to keep the KV cache in system memory and free VRAM for more model layers / a bigger context (`--no-kv-offload`); handy for MoE models or tight VRAM; off by default
+- min-p sampling / reasoning format / chat-template kwargs: min-p scales the filter by the top candidate probability (smoother than top-p); reasoning format controls how thinking is returned (none / deepseek / deepseek-legacy); chat-template kwargs passes extra JSON to the Jinja template (for Qwen3-family, `{"enable_thinking":false}` really turns thinking off)
 - Auto-compute: when a model is bigger than VRAM it now partial-offloads the layers that fit (read from GGUF metadata; MoE benefits most) instead of falling back to pure CPU
 - All parameters can be left empty: empty fields are not passed to llama-server, which then uses its own defaults
 - llama-server.exe path is a global setting (choose it in Settings; leave empty for same-folder)
+- Model folder is customizable (choose it in Settings; leave empty for the program's `models/` folder)
 - GPU dropdown (auto-detected via `nvidia-smi`); listen on localhost / LAN; KV cache precision options
 - Live logs + persistent display of model name and API endpoints (e.g. `/v1/chat/completions`)
 - Single-file exe, no Python installation needed
@@ -33,19 +35,21 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 2. Put GGUF models into a `models/` subdirectory next to the program
 3. Run `LLMGUI.exe`, or run `python llm_gui.py`
 
-> Gemma models need `gemma_chat_template.jinja` (bundled in this repo).
+> Old Gemma (gemma-2b/7b, translategemma, etc.) needs `gemma_chat_template.jinja` (bundled in this repo) with the "Gemma 模型" box checked; gemma3/4 ship their own template and need neither.
 
 ## Usage
 
 - **Presets**: tune parameters then click "存为预设" to save; each model can have multiple presets (stored locally in `llm_presets.json`, a personal file not committed to the repo). Every settable parameter is saved into the preset (including thinking / Gemma); empty values are not passed to llama-server (llama defaults apply)
 - **Auto-compute**: pick a "模型定位" (category) then click "⚙ 计算默认"; the program computes `ctx / ngl / temp…` from your VRAM and model size (results stored locally in `llm_default_presets.json`, machine-specific, not committed)
-- **Gemma**: check the "Gemma 模型" box in the parameters area to launch with `--chat-template-file` and low-temperature auto-compute; saved as a preset parameter, falls back to filename detection when omitted
+- **Gemma**: check the "Gemma 模型" box in the parameters area to launch with `--chat-template-file` and low-temperature auto-compute; saved as a preset parameter. Off by default — only old Gemma (gemma-2b/7b, translategemma, etc.) needs it; new gemma3/4 ship their own template and don't need it
 - **Thinking mode**: the "思考模式" checkbox in the parameters area defaults to on → launch with `--reasoning on` (reasoning models think first, e.g. Murasaki's chain-of-thought / Qwen3); uncheck → `--reasoning off` (direct answer). Saved as a preset parameter (treated as on when omitted)
 - **Reasoning budget**: the "推理预算" field under "思考模式" limits how many tokens the model spends thinking (`--reasoning-budget`). `-1`=unlimited / `0`=end thinking immediately / positive=budget; blank = not passed (llama default -1 = unlimited)
+- **min-p / reasoning format / chat-template kwargs**: "min-p" completes the sampling options (blank = llama default 0.05); "思考格式" controls how thinking is returned (`--reasoning-format`, pairs with thinking mode, blank = auto); "模板额外参数" accepts `{"enable_thinking":false}` to really turn thinking off for Qwen3-family (`--chat-template-kwargs`, template-level, more direct than `--reasoning off`). All saved as preset parameters; blank = not passed
 - **Multimodal**: check the "多模态" box → launch with `--mmproj`. The projector defaults to "（自动）" auto-match by filename (a single one is used directly; several → best match; none matches → warning in the log), or pick a specific file in the "投影文件" dropdown (remembered per model, takes priority over auto). Saved as a preset parameter, default off. mmproj files are not listed as selectable models
 - **Image min tokens**: the "图像 Min Tokens" field right under "多模态" sets the minimum tokens per image for vision models with dynamic resolution (`--image-min-tokens`). Larger = sharper but heavier/slower; blank = not passed (llama reads the default from the model). Saved as a preset parameter
 - **KV not offloaded**: check "KV 不卸载到 GPU" to launch with `--no-kv-offload` — the KV cache stays in system memory, freeing VRAM for more model layers / a bigger context (handy for MoE models or tight VRAM); off by default. Saved as a preset parameter
 - **llama path**: defaults to `llama-server.exe` next to the program; a different path can be set globally in Settings (not part of presets)
+- **Model folder**: defaults to the program's `models/`; a different folder for GGUF models can be set globally in Settings (not part of presets); the model list / mmproj / model list window refresh after the change
 - **API address**: after startup, the model name and `http://127.0.0.1:<port>` endpoints are shown persistently above the log
 
 ## Files
@@ -70,6 +74,12 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.9.0 (2026-08-21) New + changed:
+  - New: "min-p" parameter (`--min-p`) — min-p sampling, scales the filter by the top candidate probability (smoother than top-p); blank = llama default 0.05; saved as a preset parameter
+  - New: "思考格式" parameter (`--reasoning-format`) — controls how thinking is returned by the API (none / deepseek / deepseek-legacy / auto); pairs with thinking mode; saved as a preset parameter
+  - New: "模板额外参数" parameter (`--chat-template-kwargs`) — passes extra JSON object string to the Jinja template; for Qwen3-family `{"enable_thinking":false}` really turns thinking off (template-level, more direct than `--reasoning off`); saved as a preset parameter
+  - Changed: Gemma template is now a pure manual opt-in — dropped filename auto-detection (a name containing "gemma" no longer auto-enables); off by default; only old Gemma (gemma-2b/7b, translategemma) needs it, new gemma3/4 ship their own template; remembered per model once checked
+  - New: model folder is customizable (choose it in Settings; blank = program's `models/`) — GGUF models can live anywhere; the model list / mmproj / list window refresh after the change
 - v1.8.0 (2026-08-18) New + changed + polish:
   - New: "图像 Min Tokens" under the multimodal option (`--image-min-tokens`) — minimum tokens per image for vision models with dynamic resolution; blank = llama reads the default from the model; saved as a preset parameter
   - New: preset parameter "KV 不卸载到 GPU" (`--no-kv-offload`) — keeps the KV cache in system memory, freeing VRAM for more model layers / a bigger context (handy for MoE models or tight VRAM); off by default
