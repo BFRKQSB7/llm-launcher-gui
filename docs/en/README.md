@@ -21,6 +21,7 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - All parameters can be left empty: empty fields are not passed to llama-server, which then uses its own defaults
 - llama-server.exe path is a global setting (choose it in Settings; leave empty for same-folder)
 - Model folder is customizable (choose it in Settings; leave empty for the program's `models/` folder)
+- Single-file configuration: settings, presets, and auto-computed defaults all live in `llm_gui_data.json`; the first launch automatically consolidates and removes the three legacy config files
 - GPU dropdown (auto-detected via `nvidia-smi`); listen on localhost / LAN; KV cache precision options
 - Live logs + persistent display of model name and API endpoints (e.g. `/v1/chat/completions`)
 - Single-file exe, no Python installation needed
@@ -39,8 +40,8 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 
 ## Usage
 
-- **Presets**: tune parameters then click "存为预设" to save; each model can have multiple presets (stored locally in `llm_presets.json`, a personal file not committed to the repo). Every settable parameter is saved into the preset (including thinking / Gemma); empty values are not passed to llama-server (llama defaults apply)
-- **Auto-compute**: pick a "模型定位" (category) then click "⚙ 计算默认"; the program computes `ctx / ngl / temp…` from your VRAM and model size (results stored locally in `llm_default_presets.json`, machine-specific, not committed)
+- **Presets**: tune parameters then click "存为预设" to save; each model can have multiple presets (stored in the `presets` section of local `llm_gui_data.json`, a personal file not committed to the repo). Every settable parameter is saved into the preset (including thinking / Gemma); empty values are not passed to llama-server (llama defaults apply)
+- **Auto-compute**: pick a "模型定位" (category) then click "⚙ 计算默认"; the program computes `ctx / ngl / temp…` from your VRAM and model size (stored in the `defaults` section of `llm_gui_data.json`)
 - **Gemma**: check the "Gemma 模型" box in the parameters area to launch with `--chat-template-file` and low-temperature auto-compute; saved as a preset parameter. Off by default — only old Gemma (gemma-2b/7b, translategemma, etc.) needs it; new gemma3/4 ship their own template and don't need it
 - **Thinking mode**: the "思考模式" checkbox in the parameters area defaults to on → launch with `--reasoning on` (reasoning models think first, e.g. Murasaki's chain-of-thought / Qwen3); uncheck → `--reasoning off` (direct answer). Saved as a preset parameter (treated as on when omitted)
 - **Reasoning budget**: the "推理预算" field under "思考模式" limits how many tokens the model spends thinking (`--reasoning-budget`). `-1`=unlimited / `0`=end thinking immediately / positive=budget; blank = not passed (llama default -1 = unlimited)
@@ -58,13 +59,13 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 |------|-------------|
 | `llm_gui.py` | Program source |
 | `gemma_chat_template.jinja` | Chat template for Gemma models |
-| `presets_template.json` | Preset template (commented JSONC). **Kept in the repo — download it yourself if needed**; copy to `llm_presets.json` or import it via Settings → Import presets |
+| `presets_template.json` | Preset template (commented JSONC). **Kept in the repo — download it yourself if needed**; import it via Settings → Import presets |
 | `app.ico` | Program icon |
 | `维护文档.md` | File maintenance doc (project structure & search anchors, for maintainers) |
 
 > Release packages ship `LLMGUI.exe` only by default; `presets_template.json` lives at the repo root for users who need it to download.
 
-Files auto-generated locally at runtime (personal, not committed): `llm_presets.json` (presets), `llm_default_presets.json` (auto-computed params), `llm_gui_config.json` (local config).
+The app now generates one local personal data file (not committed): `llm_gui_data.json`, with `config` (machine settings), `presets`, and `defaults` (auto-computed cache) sections. On the first v1.10.0 launch, the three legacy JSON files are consolidated automatically and removed only after the unified file is written successfully.
 
 ## Build the exe
 
@@ -74,6 +75,10 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.10.0 (2026-08-30) New + polish:
+  - New: single-file configuration — machine settings, user presets, and auto-computed defaults now share three isolated sections in `llm_gui_data.json`, so the app maintains only one config file at runtime
+  - Polish: automatic legacy migration — the first launch consolidates `llm_gui_config.json`, `llm_presets.json`, and `llm_default_presets.json`, then removes them only after the unified file is safely written; existing settings and presets need no manual migration
+  - Polish: writes to the unified file use an in-process lock plus a same-directory temporary file and atomic replacement, preventing background hardware detection and UI saves from overwriting each other or leaving partial JSON
 - v1.9.0 (2026-08-21) New + changed:
   - New: "min-p" parameter (`--min-p`) — min-p sampling, scales the filter by the top candidate probability (smoother than top-p); blank = llama default 0.05; saved as a preset parameter
   - New: "思考格式" parameter (`--reasoning-format`) — controls how thinking is returned by the API (none / deepseek / deepseek-legacy / auto); pairs with thinking mode; saved as a preset parameter

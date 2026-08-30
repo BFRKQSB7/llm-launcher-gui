@@ -4,7 +4,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 > [English](docs/en/README.md)
 
-![](https://img.shields.io/badge/version-v1.9.0-blue)
+![](https://img.shields.io/badge/version-v1.10.0-blue)
 
 ## 特性
 
@@ -23,6 +23,7 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 - 所有参数可留空：空字段 = 不传给 llama-server，用 llama 自身默认值
 - llama-server.exe 路径为全局设置（「设置」里选择，留空用程序同目录）
 - 模型文件夹可自定义（「设置」里选择，留空用程序同目录 `models/`）
+- 配置单文件化：预设、本机设置、自动计算缓存统一存入 `llm_gui_data.json`；首次启动自动整合并清理旧版三个配置文件
 - GPU 下拉（`nvidia-smi` 自动检测）；监听地址本机 / 局域网；KV 缓存精度档位
 - 实时日志 + 常驻显示模型名与 API 地址（含 `/v1/chat/completions` 等端点）
 - 单文件 exe，无需安装 Python
@@ -41,8 +42,8 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 
 ## 使用说明
 
-- **预设**：选好模型和参数后点「存为预设」；每个模型可有多套预设（数据存本地 `llm_presets.json`，属个人文件，不入库）。所有可设置参数都存进预设（含思考模式 / Gemma），留空 = 不传给 llama-server 用默认值
-- **自动计算**：选「模型定位」后点「⚙ 计算默认」，程序按本机显存 + 模型大小算出 `ctx / ngl / temp…`（结果存本地 `llm_default_presets.json`，机器相关，不入库）
+- **预设**：选好模型和参数后点「存为预设」；每个模型可有多套预设（数据存本地 `llm_gui_data.json` 的 `presets` 分区，属个人文件，不入库）。所有可设置参数都存进预设（含思考模式 / Gemma），留空 = 不传给 llama-server 用默认值
+- **自动计算**：选「模型定位」后点「⚙ 计算默认」，程序按本机显存 + 模型大小算出 `ctx / ngl / temp…`（结果存 `llm_gui_data.json` 的 `defaults` 分区）
 - **Gemma 模型**：勾选参数区的「Gemma 模型」复选框，启动会带 `--chat-template-file` 且自动计算采用低温度；存为预设参数。默认关——只有旧版 Gemma（gemma-2b/7b、translategemma 等）需要勾，新 gemma3/4 自带模板、无需勾选
 - **思考模式**：参数区的「思考模式」默认开 → 启动带 `--reasoning on`（推理模型先思考再答，如 Murasaki 思维链 / Qwen3）；取消 → 带 `--reasoning off`（直出答案）。作为预设参数保存，预设省略时按开处理
 - **推理预算**：「思考模式」正下方的「推理预算」限定思考阶段最多花费的 token（`--reasoning-budget`）。`-1`=不限 / `0`=立即结束思考 / 正数=预算；留空 = 不传（llama 默认 -1 不限）
@@ -60,13 +61,13 @@ Windows 本地桌面启动器 —— 用图形界面管理 `llama-server`，启�
 |------|------|
 | `llm_gui.py` | 程序源码 |
 | `gemma_chat_template.jinja` | Gemma 聊天模板 |
-| `presets_template.json` | 预设模板（带注释的 JSONC）。**随仓库提供，有需要的用户自行下载**；复制成 llm_presets.json 或从「设置→导入预设」合并即可用 |
+| `presets_template.json` | 预设模板（带注释的 JSONC）。**随仓库提供，有需要的用户自行下载**；从「设置→导入预设」合并即可用 |
 | `app.ico` | 程序图标 |
 | `维护文档.md` | 文件维护文档（项目结构与检索锚点，供后续维护用） |
 
 > 发布包（Release）默认仅含 `LLMGUI.exe` 单文件；`presets_template.json` 在仓库根目录，有需要的用户自行下载。
 
-本地运行后自动生成（个人文件，不入库）：`llm_presets.json`（预设）、`llm_default_presets.json`（自动计算参数）、`llm_gui_config.json`（本机配置）。
+本地运行后只生成一个个人数据文件（不入库）：`llm_gui_data.json`，内含 `config`（本机配置）、`presets`（预设）、`defaults`（自动计算缓存）。首次运行 v1.10.0 会自动整合旧版三个 JSON，确认统一文件写入成功后清理旧文件。
 
 ## 打包 exe
 
@@ -76,6 +77,10 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## 变更日志
 
+- v1.10.0（2026-08-30）新增 + 优化：
+  - 新增：配置单文件化——本机设置、用户预设、自动计算缓存统一存入 `llm_gui_data.json` 的三个独立分区，程序运行时只维护一个配置文件
+  - 优化：兼容旧配置——首次启动自动整合 `llm_gui_config.json`、`llm_presets.json`、`llm_default_presets.json`，统一文件成功落盘后再清理旧文件，已有配置和预设无需手动迁移
+  - 优化：统一文件写入加进程内锁，并通过同目录临时文件 + 原子替换落盘，避免后台硬件检测与界面保存互相覆盖或留下半截 JSON
 - v1.9.0（2026-08-21）新增 + 修改：
   - 新增：参数「min-p」（`--min-p`）——按最高候选概率动态缩放过滤、比 top-p 更顺滑，留空=llama 默认 0.05，存为预设参数
   - 新增：参数「思考格式」（`--reasoning-format`）——控制思考内容在 API 返回里的格式（none / deepseek / deepseek-legacy / auto），配「思考模式」用，存为预设参数

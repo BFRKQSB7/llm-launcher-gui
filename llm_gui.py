@@ -17,7 +17,7 @@
 # 文件组织：单文件 llm_gui.py。自上而下：常量 → 文件读写 → 硬件检测 → ToolTip → App 类 → main。
 #
 # 一、全局常量（改默认值/路径先搜这里）
-#   - 路径：MODELS_DIR / PRESETS_FILE / CONFIG_FILE / DEFAULTS_FILE / SERVER_EXE / JINJA
+#   - 路径：MODELS_DIR / DATA_FILE / LEGACY_* / SERVER_EXE / JINJA
 #     → 检索「MODELS_DIR =」
 #   - CTX_PRESETS（上下文档 4K~64K）/ PARALLEL_OPTS（并发档）→ 检索「CTX_PRESETS =」
 #   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port）。UI 按此表自动排两列（左列 row2 起、右列 row0 起）；推理预算为独立字段（row4,col2）
@@ -25,10 +25,9 @@
 #   - GEMMA_JINJA_TEMPLATE / VERSION / GITHUB_* → 检索「GEMMA_JINJA_TEMPLATE =」「VERSION =」
 #
 # 二、数据文件（与程序同目录 JSON，个人文件 gitignore 不入库）
-#   - llm_gui_config.json：窗口/sash、硬件缓存、categories、server_path（llama 路径，全局）、
-#     gemma（自动判断覆盖）、last_model/last_preset、overwrite_ask/remember_size
-#   - llm_presets.json：{模型: {预设名: 参数}}（支持 JSONC 注释；模板见 presets_template.json）
-#     llm_default_presets.json：自动计算缓存
+#   - llm_gui_data.json：config（窗口/硬件/全局设置）+ presets（用户预设）+ defaults（自动计算缓存）
+#   - 首次启动自动整合旧 llm_gui_config.json / llm_presets.json / llm_default_presets.json
+#     并在整合成功后删除旧文件；预设导入仍支持 JSONC（模板见 presets_template.json）
 #   → 读写函数检索「def load_cfg」「def load_presets」「def _strip_jsonc」
 #
 # 三、顶层函数 / 类
@@ -80,9 +79,10 @@ else:
     BASE = os.path.dirname(os.path.abspath(__file__))
 
 MODELS_DIR = os.path.join(BASE, 'models')
-PRESETS_FILE = os.path.join(BASE, 'llm_presets.json')
-CONFIG_FILE = os.path.join(BASE, 'llm_gui_config.json')
-DEFAULTS_FILE = os.path.join(BASE, 'llm_default_presets.json')
+DATA_FILE = os.path.join(BASE, 'llm_gui_data.json')
+LEGACY_PRESETS_FILE = os.path.join(BASE, 'llm_presets.json')
+LEGACY_CONFIG_FILE = os.path.join(BASE, 'llm_gui_config.json')
+LEGACY_DEFAULTS_FILE = os.path.join(BASE, 'llm_default_presets.json')
 SERVER_EXE = os.path.join(BASE, 'llama-server.exe')
 JINJA = os.path.join(BASE, 'gemma_chat_template.jinja')
 
@@ -104,7 +104,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.9.0'
+VERSION = '1.10.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
@@ -179,42 +179,96 @@ def _load_jsonc(path):
         return None
 
 
+_DATA_LOCK = threading.RLock()
+_DATA_SECTIONS = ('config', 'presets', 'defaults')
+
+
+def _empty_data():
+    return {key: {} for key in _DATA_SECTIONS}
+
+
+def _write_data(data):
+    """同目录临时文件落盘后原子替换，避免中途退出留下半截 JSON。"""
+    tmp = DATA_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, DATA_FILE)
+
+
+def _load_data():
+    """读取统一数据；首次运行自动迁移三个旧文件。"""
+    with _DATA_LOCK:
+        current = _load_jsonc(DATA_FILE) if os.path.exists(DATA_FILE) else None
+        if isinstance(current, dict) and all(isinstance(current.get(k, {}), dict) for k in _DATA_SECTIONS):
+            data = {key: current.get(key, {}) for key in _DATA_SECTIONS}
+            # 统一文件已有效时，旧文件只可能是迁移后的残留；尽力清理，不再让旧数据反向覆盖新数据。
+            for path in (LEGACY_CONFIG_FILE, LEGACY_PRESETS_FILE, LEGACY_DEFAULTS_FILE):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+            return data
+
+        data = _empty_data()
+        found_legacy = False
+        for section, path in (
+            ('config', LEGACY_CONFIG_FILE),
+            ('presets', LEGACY_PRESETS_FILE),
+            ('defaults', LEGACY_DEFAULTS_FILE),
+        ):
+            if not os.path.exists(path):
+                continue
+            legacy = _load_jsonc(path)
+            if isinstance(legacy, dict):
+                data[section] = legacy
+                found_legacy = True
+
+        if found_legacy or not os.path.exists(DATA_FILE):
+            _write_data(data)
+            for path in (LEGACY_CONFIG_FILE, LEGACY_PRESETS_FILE, LEGACY_DEFAULTS_FILE):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+        return data
+
+
+def _save_section(section, value):
+    with _DATA_LOCK:
+        data = _load_data()
+        data[section] = value
+        _write_data(data)
+
+
 def load_presets():
-    if os.path.exists(PRESETS_FILE):
-        d = _load_jsonc(PRESETS_FILE)
-        if isinstance(d, dict):
-            return d
-    return {}
+    return _load_data()['presets']
 
 
 def load_defaults():
-    try:
-        d = json.load(open(DEFAULTS_FILE, encoding='utf-8'))
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    return _load_data()['defaults']
 
 
 def save_defaults(d):
-    with open(DEFAULTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+    _save_section('defaults', d)
 
 
 def save_presets(d):
-    with open(PRESETS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
+    _save_section('presets', d)
 
 
 def load_cfg():
-    try:
-        return json.load(open(CONFIG_FILE, encoding='utf-8'))
-    except Exception:
-        return {'overwrite_ask': True}
+    cfg = _load_data()['config']
+    return cfg if cfg else {'overwrite_ask': True}
 
 
 def save_cfg(c):
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(c, f, ensure_ascii=False, indent=2)
+    _save_section('config', c)
 
 
 # mmproj 文件名里的量化/精度后缀 token，不参与身份匹配（否则短数字会误匹配进 f16/q8_0 等）
@@ -1662,7 +1716,7 @@ class App(ctk.CTk):
         ctk.CTkButton(bar, text='关闭', width=70, command=dlg.destroy).pack(side='right', padx=4)
 
     def export_selected_presets(self, dlg):
-        """批量管理：把勾选的预设导出为 JSON（与 llm_presets.json 同构，可再导入）。"""
+        """批量管理：把勾选的预设导出为 JSON（与统一文件的 presets 分区同构，可再导入）。"""
         sel = [(m, n) for (m, n), chk in self._preset_chks.items() if chk.get()]
         if not sel:
             messagebox.showinfo('导出预设', '未勾选任何预设', parent=dlg)

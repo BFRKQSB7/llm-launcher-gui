@@ -9,6 +9,8 @@ __pycache__/
 llm_presets.json
 llm_default_presets.json
 llm_gui_config.json
+llm_gui_data.json
+llm_gui_data.json.tmp
 llm_gui_err.log
 
 # llama.cpp 运行时（用户自行放置）
