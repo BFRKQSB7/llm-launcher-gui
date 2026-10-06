@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """LLM GUI — 本地 llama-server 桌面启动器（customtkinter 原生窗口，不依赖浏览器）
 
-- 扫描 models/ 列模型；每模型多套预设；模型下拉右侧 ⟳ 按钮可强制重新扫描
+- 扫描 models/ 列模型；每模型多套预设；模型下拉右侧「刷新」按钮可强制重新扫描
 - 上下文长度：自定义 + 右侧预设下拉（4K~64K）
 - 并发请求 1/2/4/8/16 → 自动算每线程上下文（并发=1 不显示）
 - 思考模式开关（默认开，存为预设参数）：on→--reasoning on / off→--reasoning off（Murasaki/Qwen3/DeepSeek 等推理模型）
@@ -20,8 +20,8 @@
 #   - 路径：MODELS_DIR / DATA_FILE / LEGACY_* / SERVER_EXE / JINJA
 #     → 检索「MODELS_DIR =」
 #   - CTX_PRESETS（上下文档 4K~64K）/ PARALLEL_OPTS（并发档）→ 检索「CTX_PRESETS =」
-#   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port）。UI 按此表自动排两列（左列 row2 起、右列 row0 起）；推理预算为独立字段（row4,col2）
-#     → 检索「PARAMS =」；加新简单参数只需在此表加一条，UI 行号自动推
+#   - PARAMS：参数表（ngl/flash/cache/temp/top_p/n_predict/port），布局由 _build_ui 的 positions 映射到标签页
+#     → 检索「PARAMS =」「positions =」；新增参数需同步布局映射与读写
 #   - GEMMA_JINJA_TEMPLATE / VERSION / GITHUB_* → 检索「GEMMA_JINJA_TEMPLATE =」「VERSION =」
 #
 # 二、数据文件（与程序同目录 JSON，个人文件 gitignore 不入库）
@@ -36,23 +36,17 @@
 #
 # 四、App 类（主窗口，方法按功能分组）
 #   - 初始化/生命周期：__init__ / _build_ui（全部 UI 在此构建）/ on_close → 检索「def _build_ui」
-#   - 参数区网格行号表（CTkScrollableFrame；改布局先看这）：
-#       row0 上下文长度(col0) / Flash(col2) | row1 并行请求 / 温度(col2)
-#       row2 GPU层数(col0) / 最大输出(col2) | row3 KV缓存 / 思考模式(col2)
-#       row4 top-p(col0) / 推理预算(col2) | row5 端口(col0) / 思考格式(col2)
-#       row6 监听地址(col0) / 多模态+投影文件(col2) | row7 显卡(col0) / 图像 Min Tokens(col2)
-#       row8 批处理大小(col0) / Gemma(col2) | row9 CORS(col0) / KV 不卸载(col2)
-#       row10 min-p(col0) | row11 模板额外参数(col0)
-#     base = 2+(len(PARAMS)+1)//2 = 6；PARAMS 左列 row2 起、右列 row0 起（右列与左列顶部对齐）；
-#     思考模式(row3,2)、推理预算(row4,2)、思考格式(row5,2)、多模态+投影文件(row6,2)、图像 Min Tokens(row7,2)、
-#     Gemma(row8,2)、KV 不卸载(row9,2)、min-p(row10,0)、模板额外参数(row11,0) 为硬编码，增删 PARAMS 项后须手动检查
+#   - 参数区：CTkTabview 内各有独立 CTkScrollableFrame；field() 创建标签与控件
+#       运行参数：上下文/并行/GPU/缓存/批次；采样与推理：采样/输出/思考
+#       视觉与模板：多模态/投影/图像 token/Gemma；服务连接：地址/端口/CORS
+#       positions 字典定义 PARAMS 的页签与位置；_field_tabs/_field_labels 用于错误定位
 #   - 模型数据：models_list / load_models / on_model_change（切模型刷新全部状态）
 #     refresh_models（⟳ 按钮，异步重扫 models/，保留当前选中；期间按钮禁用）→ 检索「def refresh_models」
 #     is_gemma（gemma 自动判断覆盖，按模型存 cfg）→ 检索「def on_model_change」「def is_gemma」
 #     思考模式/多模态 thinking/mm 已是预设参数（thinking 默认开、mm 默认关）
 #   - 多模态投影：find_mmproj（models/ 里按文件名 token 匹配 mmproj 投影文件；单个直接用、多个选最像的、都不像返回 None）；参数区「投影文件」下拉可手动指定（按模型存 cfg['mmproj']，优先于自动匹配）→ 检索「def find_mmproj」「def refresh_mmproj_menu」
 #   - 显示名：clean_model_display（去目录/去 .gguf，仅显示用，不动 current_model）→ 检索「def clean_model_display」
-#   - 默认参数：compute_defaults（显存+模型大小）/ apply_computed_defaults（后台线程计算）
+#   - 默认参数：compute_defaults（用途预设，硬件拟合交给 llama.cpp --fit）/ apply_computed_defaults（主线程即时应用）
 #     → 检索「def compute_defaults」
 #   - 预设：save_preset / del_preset / rename_preset / on_preset_load / refresh_preset_menu
 #     import_presets / export_presets / 孤儿预设 manage_orphan_presets / 批量 manage_presets_all
@@ -61,7 +55,7 @@
 #     加新参数必须在 set_params / read_params / build_cmd 三处同步（及 presets_template.json）
 #   - 命令组装与启停：build_cmd（llama-server 命令行，新 CLI 参数只在此加）
 #     start / stop / _read / _mark_stopped → 检索「def build_cmd」「def start」
-#   - 后台线程：_poll_q 队列分发（kind=params/gpus/hardware/error）→ 检索「def _poll_q」
+#   - 后台线程：_poll_q 队列分发（hardware/models/log/exited/stop_error 等；每轮有上限）→ 检索「def _poll_q」
 #   - 日志/服务信息：append_log / clear_log / update_svc_info / _set_svc_idle / _svc_*
 #   - 弹窗：open_settings / confirm_overwrite / _import_conflict_dialog / manage_* 等
 # ================================================================================
@@ -89,12 +83,38 @@ JINJA = os.path.join(BASE, 'gemma_chat_template.jinja')
 CTX_PRESETS = {'4K': 4096, '8K': 8192, '12K': 12288, '16K': 16384, '24K': 24576, '32K': 32768, '48K': 49152, '64K': 65536}
 PARALLEL_OPTS = ['1', '2', '4', '8', '16']
 
-# 模型定位：用户未指定 = 通用（旧「未指定」已删除）；新增 编程 / Agent
-CATEGORIES = ['通用', '聊天', '翻译', '角色扮演', '文学创作', '编程', 'Agent']
+# 模型定位：用户未指定 = 通用（旧「未指定」已删除）
+FIM_CATEGORY = '代码补全 / FIM'
+CATEGORIES = ['通用', '聊天', '翻译', '角色扮演', '文学创作', '编程', FIM_CATEGORY, 'Agent']
+
+
+def validate_fim_cache_reuse(category, cache_reuse, n_predict):
+    """llama.vim 的 FIM 约束；普通服务器用途不强加此限制。"""
+    if (category == FIM_CATEGORY and cache_reuse not in ('', 0)
+            and n_predict != '' and cache_reuse <= n_predict):
+        raise ValueError('代码补全 / FIM 模式下，缓存复用必须为 0（关闭）或严格大于最大输出')
+
 
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
-DEFAULT_SASH_POS = 537   # 参数区/日志区默认分割位置（用户当前窗口状态）
+DEFAULT_SASH_POS = 370   # 新布局为日志预留可读空间，实际位置按窗口高度约束
+DEFAULT_WINDOW_SIZE = (940, 880)   # 接近方形，给较大的参数控件与日志留出纵向空间
+WINDOW_LAYOUT_VERSION = 1         # 首次使用新比例时重置旧尺寸/分割线，之后仍记住用户调整
+
+UI = dict(bg='#101827', panel='#182233', field='#25344a', border='#506078',
+          text='#f8fafc', muted='#c0ccdc', accent='#2563eb', hover='#1d4ed8',
+          success='#6ee7b7', warning='#fbbf24', danger='#f87171')
+
+# 操作颜色：常态 / 悬停 / 禁用。禁用时保留色相但降低亮度，避免误判为可点击。
+BUTTON_COLORS = {
+    'blue': ('#1d4ed8', '#2563eb', '#253956'),
+    'green': ('#15803d', '#166534', '#243d32'),
+    'purple': ('#6d28d9', '#7c3aed', '#34304d'),
+    'teal': ('#0f766e', '#115e59', '#253e43'),
+    'red': ('#b91c1c', '#991b1b', '#472f38'),
+    'amber': ('#a16207', '#854d0e', '#423a2a'),
+    'neutral': ('#3c506b', '#4b6385', '#2b3648'),
+}
 
 GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if message['role'] == 'user' %}<start_of_turn>user
 {{ message['content'] }}<end_of_turn>
@@ -104,11 +124,11 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.10.0'
+VERSION = '1.11.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
-_SRC_MAX = 10   # 参数来源标识最大显示字符数；超出截断 + 完整内容进悬浮提示（防顶宽）
+_SRC_MAX = 42   # 来源标识独占一行，长名称仍截断并保留完整悬浮提示
 GPU_BOX_PAD = 58   # 显卡下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
 GPU_BOX_MAX = 180  # 显卡下拉逻辑宽度上限：保证右侧「检查配置」按钮不被压缩顶没（rowg 最大 180+8+68=256 < col1 最小 ~284）
 MMPROJ_BOX_PAD = 58   # 投影文件下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
@@ -360,7 +380,7 @@ def detect_vram_gb():
     return 0
 
 
-# ---------- GGUF 元数据解析（只读文件头，供自动计算精确估 KV/层数） ----------
+# ---------- GGUF 元数据解析（保留的只读工具；自动计算已改用 llama.cpp --fit） ----------
 
 def _read_gguf_val(f, vtype):
     """按 GGUF spec 读一个元数据值；字符串/数组递归。类型码：8=string、9=array、0~7/10~12=数字。"""
@@ -495,8 +515,17 @@ class ToolTip:
             self.hide()
 
     def hide(self, e=None):
-        if self.lab.winfo_ismapped():
-            self.lab.place_forget()
+        try:
+            if self.lab.winfo_exists() and self.lab.winfo_ismapped():
+                self.lab.place_forget()
+        except tk.TclError:
+            pass
+
+
+class ParameterError(ValueError):
+    def __init__(self, label, message):
+        super().__init__(message)
+        self.label = label
 
 
 class App(ctk.CTk):
@@ -504,26 +533,64 @@ class App(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode('dark')
         ctk.set_default_color_theme('blue')
+        # 使用一致的中文字体与中性输入底色，操作按钮按功能配色。
+        ctk.ThemeManager.theme['CTkFont']['family'] = 'Microsoft YaHei'
+        ctk.ThemeManager.theme['CTkFont']['size'] = 15
+        ctk.ThemeManager.theme['CTkOptionMenu'].update(
+            fg_color=UI['field'], button_color=UI['border'], button_hover_color=UI['hover'],
+            text_color=UI['text'], text_color_disabled='#8798af')
+        ctk.ThemeManager.theme['CTkEntry'].update(fg_color=UI['field'], border_color=UI['border'],
+                                                text_color=UI['text'], placeholder_text_color=UI['muted'])
+        ctk.ThemeManager.theme['CTkCheckBox'].update(fg_color=UI['accent'], hover_color=UI['hover'],
+                                                   text_color=UI['text'])
+        ctk.ThemeManager.theme['CTkLabel']['text_color'] = UI['text']
+        ctk.ThemeManager.theme['CTkButton'].update(text_color=UI['text'], text_color_disabled='#8798af')
+        ctk.ThemeManager.theme['CTkToplevel']['fg_color'] = UI['panel']
+        self.configure(fg_color=UI['bg'])
         self.title(f'LLM GUI — llama-server 启动器 · v{VERSION}')
-        self.geometry('900x700')
-        self.minsize(780, 580)
+        self.geometry(f'{DEFAULT_WINDOW_SIZE[0]}x{DEFAULT_WINDOW_SIZE[1]}')
+        self.minsize(780, 640)
         self._set_window_icon()
         self.proc = None
+        self._q = queue.Queue()
+        self._preset_locked = False
+        self._closing = False
+        self._closed = False
+        self._service_state = 'idle'
+        self._hardware_busy = False
+        self._api_base = ''
         self.current_model = None
         self.presets = load_presets()
         self.cfg = load_cfg()
         # 模型文件夹可自定义（空=程序同目录 models）；其余文件（presets/config/llama.exe/JINJA）仍留程序目录
         global MODELS_DIR
         MODELS_DIR = self.cfg.get('models_dir') or os.path.join(BASE, 'models')
-        ws = self.cfg.get('window_size')
-        if self.cfg.get('remember_size', True) and isinstance(ws, list) and len(ws) == 2:
-            try:
-                w, h = int(ws[0]), int(ws[1])
-                w = max(780, min(w, self.winfo_screenwidth() - 40))
-                h = max(580, min(h, self.winfo_screenheight() - 80))
-                self.geometry(f'{w}x{h}')
-            except (TypeError, ValueError):
-                pass
+        # Windows 的 Tk 屏幕尺寸可能缓存了启用 DPI 感知前的值，使用工作区实时像素。
+        scale = self._get_window_scaling()
+        screen_w, screen_h = self.winfo_screenwidth(), self.winfo_screenheight()
+        if os.name == 'nt':
+            import ctypes
+            from ctypes import wintypes
+            work_area = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(work_area), 0):
+                screen_w = work_area.right - work_area.left
+                screen_h = work_area.bottom - work_area.top
+        max_w = max(1, int(screen_w / scale) - 40)
+        max_h = max(1, int(screen_h / scale) - 40)
+        min_w, min_h = min(780, max_w), min(640, max_h)
+        self.minsize(min_w, min_h)
+        reset_layout = self.cfg.get('window_layout_version') != WINDOW_LAYOUT_VERSION
+        ws = self.cfg.get('window_size') if not reset_layout and self.cfg.get('remember_size', True) else None
+        try:
+            w, h = (int(ws[0]), int(ws[1])) if isinstance(ws, list) and len(ws) == 2 else DEFAULT_WINDOW_SIZE
+        except (TypeError, ValueError, OverflowError):
+            w, h = DEFAULT_WINDOW_SIZE
+        w, h = max(min_w, min(w, max_w)), max(min_h, min(h, max_h))
+        self.geometry(f'{w}x{h}')
+        if reset_layout:
+            self.cfg['window_size'] = [w, h]
+            self.cfg.pop('sash_pos', None)
+        self.cfg['window_layout_version'] = WINDOW_LAYOUT_VERSION
         self._build_ui()
         self.load_models()
         self.protocol('WM_DELETE_WINDOW', self.on_close)
@@ -535,20 +602,29 @@ class App(ctk.CTk):
         self.after(100, self.on_model_change)
         self.after(200, self._startup_hardware)
         self.after(250, self._check_server)
-        self._q = queue.Queue()
-        self._preset_locked = False
         self.after(150, self._poll_q)
 
     def _restore_sash(self, pos):
         try:
-            self.pw.sashpos(0, pos)
+            scale = self._get_window_scaling()
+            height = self.pw.winfo_height()
+            self.pw.sashpos(0, max(1, min(max(int(230 * scale), pos), height - int(130 * scale))))
         except Exception:
             pass
 
     def _restore_default_sash(self):
         try:
-            self.pw.sashpos(0, DEFAULT_SASH_POS)
+            target = max(int(DEFAULT_SASH_POS * self._get_window_scaling()), int(self.pw.winfo_height() * 0.66))
+            self._restore_sash(target)
         except Exception:
+            pass
+
+    def _on_pane_resize(self, event=None):
+        if self._closing or self._closed:
+            return
+        try:
+            self._restore_sash(self.pw.sashpos(0))
+        except tk.TclError:
             pass
 
     def _set_window_icon(self):
@@ -583,221 +659,231 @@ class App(ctk.CTk):
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
+        self._param_widgets = []
+        self._field_tabs = {}
+        self._field_labels = {}
 
-        self.top_frame = ctk.CTkFrame(self)
-        self.top_frame.grid(row=0, column=0, sticky='ew', padx=12, pady=(12, 4))
-        self.top_frame.grid_columnconfigure(1, weight=1)
-        # 第一行：模型 + 模型定位 + 计算默认
-        ctk.CTkLabel(self.top_frame, text='模型').grid(row=0, column=0, padx=(12, 6), pady=6)
-        rowm = ctk.CTkFrame(self.top_frame, fg_color='transparent')
-        rowm.grid(row=0, column=1, padx=6, pady=6, sticky='ew')
-        rowm.grid_columnconfigure(0, weight=1)
-        self.model_sel = ctk.CTkOptionMenu(rowm, values=[], command=lambda _: self.on_model_change(), width=260)
-        self.model_sel.grid(row=0, column=0, sticky='ew')
-        self.refresh_btn = ctk.CTkButton(rowm, text='⟳', width=32, command=self.refresh_models,
-                                         fg_color='#3a3f4b', hover_color='#4a5263')
-        ToolTip(self.refresh_btn, '刷新模型列表：重新扫描 models/ 目录下的模型文件')
-        self.refresh_btn.grid(row=0, column=1, padx=(6, 0))
-        ctk.CTkLabel(self.top_frame, text='模型定位').grid(row=0, column=2, padx=(20, 6), pady=6)
-        self.cat_sel = ctk.CTkOptionMenu(self.top_frame, values=CATEGORIES, width=110,
-                                         command=lambda _: self.on_category_change())
-        self.cat_sel.grid(row=0, column=3, padx=6, pady=6, sticky='w')
-        self.compute_btn = ctk.CTkButton(self.top_frame, text='⚙ 计算默认', width=84, command=lambda: self.apply_computed_defaults(force=True))
-        ToolTip(self.compute_btn, '按本机显存 + 模型大小，自动计算当前模型的默认参数')
-        self.compute_btn.grid(row=0, column=4, padx=(10, 12), pady=6)
-        self.param_src_lab = ctk.CTkLabel(self.top_frame, text='', text_color='#8ab4f8', font=('Microsoft YaHei', 11))
-        self.param_src_lab.grid(row=0, column=5, padx=(0, 12), pady=6, sticky='w')
-        # 第二行：预设
-        ctk.CTkLabel(self.top_frame, text='预设').grid(row=1, column=0, padx=(12, 6), pady=6)
-        self.preset_sel = ctk.CTkOptionMenu(self.top_frame, values=['（无预设）'], command=lambda _: self.on_preset_load(), width=160)
-        self.preset_sel.grid(row=1, column=1, padx=6, pady=6, sticky='w')
-        self.preset_name = ctk.CTkEntry(self.top_frame, placeholder_text='新预设名（默认=模型名）')
-        self.preset_name.grid(row=1, column=2, columnspan=2, padx=6, pady=6, sticky='ew')
-        self.save_btn = ctk.CTkButton(self.top_frame, text='存为预设', width=80, command=self.save_preset)
-        ToolTip(self.save_btn, '把当前参数保存为预设（名称用左边输入框的文字）')
-        self.save_btn.grid(row=1, column=4, padx=6, pady=6)
-        self.del_btn = ctk.CTkButton(self.top_frame, text='删预设', width=70, fg_color='#7a4a4a', hover_color='#8a5555', command=self.del_preset)
-        ToolTip(self.del_btn, '删除下拉中当前选中的预设')
-        self.del_btn.grid(row=1, column=5, padx=(6, 12), pady=6)
-        self.rename_btn = ctk.CTkButton(self.top_frame, text='重命名', width=70, fg_color='#4a5568', hover_color='#556271', command=self.rename_preset)
-        ToolTip(self.rename_btn, '把下拉中选中的预设，改名为左边输入框里的文字')
-        self.rename_btn.grid(row=1, column=6, padx=(6, 12), pady=6)
+        def button(parent, text, command, width=80, role='neutral', **kwargs):
+            colors = BUTTON_COLORS[role]
+            widget = ctk.CTkButton(parent, text=text, command=command, width=width, height=40,
+                corner_radius=8, fg_color=colors[0], hover_color=colors[1],
+                text_color=UI['text'], text_color_disabled='#a7b5c8', **kwargs)
+            widget._action_colors = colors
+            return widget
 
-        # 参数区 / 日志区 用 ttk.Panedwindow（sash 原生可拖，1:1 且顺滑）
-        self.pw = ttk.Panedwindow(self, orient='vertical')
-        _st = ttk.Style(self)
-        _st.configure('Vertical.TPanedwindow', background='#242424')
-        self.pw.grid(row=1, column=0, sticky='nsew', padx=12, pady=6)
-        f1 = tk.Frame(self.pw, bg='#242424')
-        pf = ctk.CTkScrollableFrame(f1, label_text='参数（悬停标签有解释）')
-        self.param_frame = pf
-        pf.pack(fill='both', expand=True)
-        self.pw.add(f1, weight=1)
-        pf.grid_columnconfigure(1, weight=1)
-        pf.grid_columnconfigure(3, weight=1)
+        self.top_frame = ctk.CTkFrame(self, fg_color=UI['panel'], corner_radius=12)
+        self.top_frame.grid(row=0, column=0, sticky='ew', padx=16, pady=(16, 8))
+        self.top_frame.grid_columnconfigure(0, weight=1)
+        title = ctk.CTkFrame(self.top_frame, fg_color='transparent')
+        title.grid(row=0, column=0, sticky='ew', padx=16, pady=(10, 4))
+        ctk.CTkLabel(title, text='LLM GUI', font=('Microsoft YaHei', 22, 'bold'),
+                     text_color=UI['text']).pack(side='left')
+        ctk.CTkLabel(title, text='本地模型工作台', text_color=UI['muted']).pack(side='left', padx=12)
+        button(title, '设置', self.open_settings, 64).pack(side='right')
 
-        def add_pair(row, col, label, tip, widget):
-            lab = ctk.CTkLabel(pf, text=label, anchor='w', width=110)
-            lab.grid(row=row, column=col, padx=(14, 6), pady=5, sticky='w')
+        model_row = ctk.CTkFrame(self.top_frame, fg_color='transparent')
+        model_row.grid(row=1, column=0, sticky='ew', padx=16, pady=5)
+        model_row.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(model_row, text='模型', width=42, anchor='w').grid(row=0, column=0)
+        self.model_sel = ctk.CTkOptionMenu(model_row, values=['（暂无模型）'], width=140,
+            dynamic_resizing=False, command=lambda _: self.on_model_change(), height=40)
+        self.model_sel.grid(row=0, column=1, sticky='ew', padx=(0, 6))
+        self._model_tooltip = ToolTip(self.model_sel, '选择 GGUF 模型')
+        self.refresh_btn = button(model_row, '刷新', self.refresh_models, 54, role='teal')
+        self.refresh_btn.grid(row=0, column=2)
+        ToolTip(self.refresh_btn, '重新扫描模型文件夹，保留当前选择与参数')
+        self.cat_sel = ctk.CTkOptionMenu(model_row, values=CATEGORIES, width=140, height=40,
+                                       dynamic_resizing=False, command=lambda _: self.on_category_change())
+        self.cat_sel.grid(row=0, column=3, padx=(12, 6))
+        ToolTip(self.cat_sel, '模型用途：切换后会应用对应的默认参数')
+        self.compute_btn = button(model_row, '应用默认', lambda: self.apply_computed_defaults(force=True), 86, role='purple')
+        self.compute_btn.grid(row=0, column=4)
+        ToolTip(self.compute_btn, '按用途重置当前参数；上下文与 GPU 层数交给 llama.cpp 启动时拟合')
+
+        preset_row = ctk.CTkFrame(self.top_frame, fg_color='transparent')
+        preset_row.grid(row=2, column=0, sticky='ew', padx=16, pady=5)
+        preset_row.grid_columnconfigure(2, weight=1)
+        ctk.CTkLabel(preset_row, text='预设', width=42, anchor='w').grid(row=0, column=0)
+        self.preset_sel = ctk.CTkOptionMenu(preset_row, values=['（无预设）'], width=155, height=40,
+                                          dynamic_resizing=False, command=lambda _: self.on_preset_load())
+        self.preset_sel.grid(row=0, column=1, padx=(0, 8))
+        self.preset_name = ctk.CTkEntry(preset_row, placeholder_text='输入预设名称', width=120, height=40)
+        self.preset_name.grid(row=0, column=2, sticky='ew', padx=(0, 8))
+        self.save_btn = button(preset_row, '保存预设', self.save_preset, 82, role='blue')
+        self.save_btn.grid(row=0, column=3)
+        self.rename_btn = button(preset_row, '重命名', self.rename_preset, 66, role='amber')
+        self.rename_btn.grid(row=0, column=4, padx=6)
+        self.del_btn = button(preset_row, '删除', self.del_preset, 54, role='red')
+        self.del_btn.grid(row=0, column=5)
+        ToolTip(self.save_btn, '将当前全部参数保存到左侧名称；Ctrl+S 保存')
+        ToolTip(self.rename_btn, '把选中的预设改为输入框里的名称')
+        ToolTip(self.del_btn, '删除当前选中的预设，删除前会确认')
+        self.preset_name.bind('<Return>', lambda _: self.save_preset())
+        self.param_src_lab = ctk.CTkLabel(self.top_frame, text='', text_color=UI['muted'],
+                                         anchor='w', height=26, font=('Microsoft YaHei', 13))
+        self.param_src_lab.grid(row=3, column=0, sticky='ew', padx=58, pady=(0, 8))
+
+        style = ttk.Style(self)
+        style.configure('Workspace.Vertical.TPanedwindow', background=UI['bg'])
+        self.pw = ttk.Panedwindow(self, orient='vertical', style='Workspace.Vertical.TPanedwindow')
+        self.pw.bind('<Configure>', self._on_pane_resize)
+        self.pw.grid(row=1, column=0, sticky='nsew', padx=16, pady=0)
+        f1 = tk.Frame(self.pw, bg=UI['bg'])
+        self.pw.add(f1, weight=3)
+        self.param_tabs = ctk.CTkTabview(f1, fg_color=UI['panel'], corner_radius=12,
+            segmented_button_fg_color=UI['field'], segmented_button_unselected_color=UI['field'],
+            segmented_button_selected_color=UI['accent'], segmented_button_selected_hover_color=UI['hover'],
+            text_color=UI['text'])
+        self.param_tabs.pack(fill='both', expand=True)
+        self.param_frames = {}
+        for name in ('运行参数', '采样与推理', '视觉与模板', '服务连接'):
+            tab = self.param_tabs.add(name)
+            tab.grid_columnconfigure(0, weight=1)
+            tab.grid_rowconfigure(1, weight=1)
+            hints = {'运行参数': '留空使用引擎默认值；上下文与 GPU 层数留空可在启动时自动拟合。',
+                     '采样与推理': '控制回答风格、输出长度和思考方式；悬停字段名称查看说明。',
+                     '视觉与模板': '视觉模型需要投影文件；旧版 Gemma 可启用外部聊天模板。',
+                     '服务连接': '连接配置在下次启动时生效；运行中的 API 地址显示在日志上方。'}
+            ctk.CTkLabel(tab, text=hints[name], text_color=UI['muted'], anchor='w',
+                         font=('Microsoft YaHei', 13)).grid(row=0, column=0, sticky='ew', padx=10)
+            pf = ctk.CTkScrollableFrame(tab, fg_color=UI['panel'], corner_radius=0)
+            pf.grid(row=1, column=0, sticky='nsew', padx=2, pady=(4, 2))
+            pf.grid_columnconfigure((0, 1), weight=1, uniform='fields')
+            self.param_frames[name] = pf
+        self.param_frame = self.param_frames['运行参数']
+
+        def field(tab, row, col, label, tip, attr=None, values=None, placeholder='留空使用默认值', span=1):
+            box = ctk.CTkFrame(self.param_frames[tab], fg_color='transparent')
+            box.grid(row=row, column=col, columnspan=span, sticky='nsew', padx=10, pady=(4, 8))
+            lab = ctk.CTkLabel(box, text=label, anchor='w', height=28, text_color=UI['text'])
+            lab.pack(fill='x', pady=(0, 4))
             ToolTip(lab, tip)
-            widget.grid(row=row, column=col + 1, padx=(6, 14), pady=5, sticky='w')
+            if attr:
+                if values:
+                    widget = ctk.CTkOptionMenu(box, values=values, dynamic_resizing=False, height=40)
+                else:
+                    widget = ctk.CTkEntry(box, placeholder_text=placeholder, height=40,
+                                           fg_color=UI['field'], border_color=UI['border'])
+                widget.pack(fill='x')
+                setattr(self, attr, widget)
+                self._param_widgets.append(widget)
+                self._field_tabs[attr] = tab
+                self._field_labels[label] = attr
+                return widget
+            return box
 
-        # 上下文长度：输入 + 预设下拉
-        lab = ctk.CTkLabel(pf, text='上下文长度', anchor='w', width=110)
-        lab.grid(row=0, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '提示词上下文长度（token）。越长一次能处理越多文本，越占显存。右侧下拉可一键选预设（按最低 4G 显存起步）。')
-        row0 = ctk.CTkFrame(pf, fg_color='transparent')
-        row0.grid(row=0, column=1, sticky='ew', padx=(6, 14), pady=5)
-        self.ctx_input = ctk.CTkEntry(row0, width=120)
-        self.ctx_input.pack(side='left')
+        basic, sampling, vision, service = tuple(self.param_frames)
+        box = field(basic, 0, 0, '上下文长度', '输入 token 数或选择快捷值。留空由 llama.cpp 在启动时自动拟合。')
+        row = ctk.CTkFrame(box, fg_color='transparent')
+        row.pack(fill='x')
+        self.ctx_input = ctk.CTkEntry(row, width=100, height=40, placeholder_text='留空自动拟合')
+        self.ctx_input.pack(side='left', fill='x', expand=True)
         self.ctx_input.bind('<KeyRelease>', lambda _: self.sync_ctx_preset())
-        self.ctx_preset = ctk.CTkOptionMenu(row0, values=['自定义'] + list(CTX_PRESETS.keys()), width=90, command=lambda _: self.on_ctx_preset())
+        self.ctx_preset = ctk.CTkOptionMenu(row, values=['自定义'] + list(CTX_PRESETS), width=96,
+                                           height=40, dynamic_resizing=False, command=lambda _: self.on_ctx_preset())
         self.ctx_preset.pack(side='left', padx=(8, 0))
+        box = field(basic, 0, 1, '并行请求', '同时处理的请求数；上下文由各请求共享。')
+        self.parallel_sel = ctk.CTkOptionMenu(box, values=['（默认）'] + PARALLEL_OPTS,
+                                             height=40, command=lambda _: self.update_calc())
+        self.parallel_sel.pack(fill='x')
+        self.per_worker_lab = ctk.CTkLabel(box, text='', height=18, anchor='w', text_color=UI['success'])
+        self.per_worker_lab.pack(fill='x')
+        positions = {'ngl': (basic, 1, 0), 'flash': (basic, 1, 1), 'cache': (basic, 2, 0),
+                     'temp': (sampling, 0, 0), 'top_p': (sampling, 0, 1),
+                     'n_predict': (sampling, 2, 0), 'port': (service, 0, 1)}
+        for pp in PARAMS:
+            tab, r, c = positions[pp['k']]
+            field(tab, r, c, pp['t'], pp['tip'], 'w_' + pp['k'], pp.get('sel'))
 
-        # 并行请求 + 每线程上下文
-        lab = ctk.CTkLabel(pf, text='并行请求', anchor='w', width=110)
-        lab.grid(row=1, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '同时处理的请求数。选完后按 上下文÷并行 自动算每个工作线程的上下文（并行=1 时不计算）。')
-        row1 = ctk.CTkFrame(pf, fg_color='transparent')
-        row1.grid(row=1, column=1, sticky='ew', padx=(6, 14), pady=5)
-        self.parallel_sel = ctk.CTkOptionMenu(row1, values=['（默认）'] + PARALLEL_OPTS, width=80, command=lambda _: self.update_calc())
-        self.parallel_sel.pack(side='left')
-        self.per_worker_lab = ctk.CTkLabel(row1, text='', text_color='#9fd6a5', width=220)
-        self.per_worker_lab.pack(side='left', padx=(12, 0))
-
-        # 其余简单字段两列排：左列 row2 起、右列 row0 起（右列与左列顶部对齐，Flash 与上下文长度同行）
-        simple = PARAMS
-        r = 2
-        for i, pp in enumerate(simple):
-            if i % 2:
-                row, col = i // 2, 2
-            else:
-                row, col = r + i // 2, 0
-            w = ctk.CTkOptionMenu(pf, values=pp['sel'], width=170) if pp.get('sel') else ctk.CTkEntry(pf, width=170)
-            add_pair(row, col, pp['t'], pp['tip'], w)
-            setattr(self, 'w_' + pp['k'], w)
-
-        # 推理预算（--reasoning-budget）：思考 token 上限，配思考模式用（Murasaki/Qwen3/DeepSeek 等推理模型）
-        self.w_reasoning_budget = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不限')
-        add_pair(4, 2, '推理预算', '推理模型在「思考」阶段最多花费的 token（--reasoning-budget）。-1=不限，0=立即结束思考，N=预算。留空=不传（llama 默认 -1 不限）。', self.w_reasoning_budget)
-
-        # 思考格式（--reasoning-format）：控制思考内容在 API 返回里的呈现（配思考模式用）
-        self.w_reasoning_format = ctk.CTkOptionMenu(pf, values=['（默认）', 'auto', 'none', 'deepseek', 'deepseek-legacy'], width=170)
-        add_pair(5, 2, '思考格式', '控制思考内容在 API 返回里怎么呈现（--reasoning-format）。none=思考留在 message.content；deepseek=进 message.reasoning_content；deepseek-legacy=保留 <think> 标签同时进 reasoning_content；auto=自动。留空=不传（llama 默认 auto）。配「思考模式」用。', self.w_reasoning_format)
-
-        # 监听地址 + 提示
-        base = r + (len(simple) + 1) // 2
-        lab = ctk.CTkLabel(pf, text='监听地址', anchor='w', width=110)
-        lab.grid(row=base, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '127.0.0.1=仅本机访问；0.0.0.0=局域网可访问（配合防火墙）。')
-        rowh = ctk.CTkFrame(pf, fg_color='transparent')
-        rowh.grid(row=base, column=1, sticky='w', padx=(6, 14), pady=5)
-        self.host_sel = ctk.CTkOptionMenu(rowh, values=['（默认）', '127.0.0.1', '0.0.0.0'], width=130, command=lambda _: self.update_host_hint())
-        self.host_sel.pack(side='left')
-        self.host_hint = ctk.CTkLabel(rowh, text='', text_color='#9fd6a5')
-        self.host_hint.pack(side='left', padx=(8, 0))
-
-        # GPU 选择 + 刷新
-        lab = ctk.CTkLabel(pf, text='显卡', anchor='w', width=110)
-        lab.grid(row=base + 1, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '选择用于推理的显卡（--main-gpu）。「自动」不传该参数，由 llama 自行选择。')
-        rowg = ctk.CTkFrame(pf, fg_color='transparent')
-        rowg.grid(row=base + 1, column=1, sticky='w', padx=(6, 14), pady=5)
+        box = field(basic, 2, 1, '推理显卡', '自动由引擎选择，也可指定主显卡；检测不会覆盖当前参数。')
+        rowg = ctk.CTkFrame(box, fg_color='transparent')
+        rowg.pack(fill='x')
         self.gpu_sel = ctk.CTkOptionMenu(rowg, values=['自动'], width=GPU_BOX_MAX,
-                                         command=lambda _: self._update_gpu_tip())
+            dynamic_resizing=False, height=40, command=lambda _: self._update_gpu_tip())
         self.gpu_sel.pack(side='left')
-        self.gpu_tip = ToolTip(self.gpu_sel, '选择用于推理的显卡（--main-gpu）。「自动」不传该参数，由 llama 自行选择。')
-        self.recheck_btn = ctk.CTkButton(rowg, text='检查配置', width=68, command=self.recheck_hardware)
-        ToolTip(self.recheck_btn, '重新检测本机显卡与显存')
+        self.gpu_tip = ToolTip(self.gpu_sel, '自动选择显卡')
+        self.recheck_btn = button(rowg, '检测硬件', self.recheck_hardware, 74, role='teal')
         self.recheck_btn.pack(side='left', padx=(8, 0))
-
-        # 可选参数：批处理大小
-        lab = ctk.CTkLabel(pf, text='批处理大小', anchor='w', width=110)
-        lab.grid(row=base + 2, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '可选（--batch-size）。留空则不传该参数，使用 llama 默认值。一般无需手动设置。')
-        self.w_n_batch = ctk.CTkEntry(pf, width=170, placeholder_text='留空=不传')
-        self.w_n_batch.grid(row=base + 2, column=1, padx=(6, 14), pady=5, sticky='w')
-
-        # CORS 允许源（--cors）：浏览器跨域访问 API 的来源白名单
-        lab = ctk.CTkLabel(pf, text='CORS 允许源', anchor='w', width=110)
-        lab.grid(row=base + 3, column=0, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(lab, '浏览器跨域访问 API 时校验的来源（--cors）。*=允许任意来源；也可写具体来源，多个用逗号分隔，如 http://localhost:3000,http://localhost:5173。留空 = 不传（llama 不启用 CORS）。')
-        self.w_cors = ctk.CTkEntry(pf, width=220, placeholder_text='* 或 http://localhost:3000')
-        self.w_cors.grid(row=base + 3, column=1, padx=(6, 14), pady=5, sticky='w')
-
-        # min-p 采样（--min-p）：动态按最高候选概率缩放过滤，比 top-p 更顺滑
-        self.w_min_p = ctk.CTkEntry(pf, width=170, placeholder_text='留空=llama 默认 0.05')
-        add_pair(10, 0, 'min-p', 'min-p 采样（--min-p）。按当前最高候选概率动态缩放过滤阈值，比 top-p 更顺滑、少一刀切。越小越接近贪心，越大越多样；0=关（用 llama 默认 0.05）。留空=不传。', self.w_min_p)
-
-        # 模板额外参数（--chat-template-kwargs）：给 Jinja 模板传额外 JSON 对象参数
-        self.w_chat_template_kwargs = ctk.CTkEntry(pf, width=220, placeholder_text='如 {"enable_thinking":false}')
-        add_pair(11, 0, '模板额外参数', '给聊天模板传额外 JSON 参数（--chat-template-kwargs），必须是合法 JSON 对象字符串，如 {"enable_thinking":false}。对 Qwen3 系填 enable_thinking:false 可真正关闭思考（模板级，比 --reasoning off 更直接）；对不读该变量的模型无效。留空=不传。', self.w_chat_template_kwargs)
-
-        # 思考模式开关（预设参数，默认开；on→--reasoning on，off→--reasoning off；Murasaki/Qwen3/DeepSeek 等推理模型用）
-        self.think_chk = ctk.CTkCheckBox(pf, text='思考模式', command=self.on_thinking_toggle)
-        self.think_chk.grid(row=3, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.think_chk, '推理模型（Murasaki/Qwen3/DeepSeek 等）开=先思考再答，关=直出答案（--reasoning off）。默认开，存为预设参数；预设省略时按开处理。')
-
-        # 多模态 + 投影文件（同一行，跨两列宽度；文件名提示吃满剩余宽度，长名也尽量显示完整）
-        rowmm = ctk.CTkFrame(pf, fg_color='transparent')
-        rowmm.grid(row=6, column=2, columnspan=2, sticky='ew', padx=(14, 14), pady=5)
-        rowmm.grid_columnconfigure(2, weight=1)
-        self.mm_chk = ctk.CTkCheckBox(rowmm, text='多模态', command=self.on_mm_toggle)
-        self.mm_chk.grid(row=0, column=0, sticky='w')
-        ToolTip(self.mm_chk, '视觉/多模态模型（Qwen2.5-VL / LLaVA / MiniCPM-V 等）勾选后启动带 --mmproj，自动在 models/ 里按文件名匹配投影文件（也可用旁边下拉手动指定）。默认关，存为预设参数。')
-        self.mmproj_sel = ctk.CTkOptionMenu(rowmm, values=['（自动）'], width=100, dynamic_resizing=False,
-                                            command=lambda _: self.on_mmproj_pick())
-        self.mmproj_sel.grid(row=0, column=1, sticky='w', padx=(8, 0))
-        ToolTip(self.mmproj_sel, '当前模型用的多模态投影文件（--mmproj）。「（自动）」= 按文件名自动匹配（右侧小字显示自动选中谁）；选具体文件 = 手动指定，按模型记住。自动匹配不到时启动会在日志提示。')
-        self.mmproj_hint = tk.Label(rowmm, text='', fg='#9fd6a5', bg='#2b2b2b',
-                                    font=('Microsoft YaHei', 9), anchor='w')
-        self.mmproj_hint.grid(row=0, column=2, sticky='ew', padx=(8, 0))
+        field(basic, 3, 0, '批处理大小', '逻辑批次大小（--batch-size），留空交给引擎。', 'w_n_batch')
+        field(basic, 3, 1, '物理批次大小', '物理计算批次上限（--ubatch-size），通常不大于逻辑批次。', 'w_n_ubatch')
+        field(basic, 4, 0, '缓存复用', '提示缓存的最小复用 token 块（--cache-reuse）；0=关闭。', 'w_cache_reuse')
+        box = field(basic, 4, 1, 'KV 缓存位置', '勾选后 KV 缓存留在系统内存，为模型权重释放显存。')
+        self.no_kv_chk = ctk.CTkCheckBox(box, height=36, checkbox_width=26, checkbox_height=26, text='保留在系统内存', command=self.on_no_kv_toggle)
+        self.no_kv_chk.pack(anchor='w', pady=4)
+        field(sampling, 1, 0, 'top-k', '只从概率最高的 K 个候选采样；0=关闭。', 'w_top_k')
+        field(sampling, 1, 1, 'min-p', '按最高候选概率动态缩放过滤阈值；0=关闭。', 'w_min_p')
+        box = field(sampling, 2, 1, '思考模式', '控制 --reasoning on/off，保存到预设。')
+        self.think_chk = ctk.CTkCheckBox(box, height=36, checkbox_width=26, checkbox_height=26, text='启用思考', command=self.on_thinking_toggle)
+        self.think_chk.pack(anchor='w', pady=4)
+        field(sampling, 3, 0, '推理预算', '思考 token 上限：-1=不限，0=立即结束思考。', 'w_reasoning_budget')
+        field(sampling, 3, 1, '思考格式', 'API 中思考内容的返回格式（--reasoning-format）。',
+              'w_reasoning_format', ['（默认）', 'auto', 'none', 'deepseek', 'deepseek-legacy'])
+        box = field(vision, 0, 0, '多模态', '视觉模型启用 --mmproj；下方可选择投影文件。')
+        self.mm_chk = ctk.CTkCheckBox(box, height=36, checkbox_width=26, checkbox_height=26, text='启用图像输入', command=self.on_mm_toggle)
+        self.mm_chk.pack(anchor='w', pady=4)
+        field(vision, 0, 1, '图像 Min Tokens', '每幅图像最少 token 数，越大细节越多、显存占用越高。', 'w_image_min_tokens')
+        box = field(vision, 1, 0, '投影文件', '自动按文件名匹配，或手动指定当前模型的投影文件。', span=2)
+        self.mmproj_sel = ctk.CTkOptionMenu(box, values=['（自动）'], width=240, height=40,
+                                           dynamic_resizing=False, command=lambda _: self.on_mmproj_pick())
+        self.mmproj_sel.pack(anchor='w')
+        self.mmproj_hint = tk.Label(box, text='', fg=UI['muted'], bg=UI['panel'],
+                                    font=('Microsoft YaHei', 12), anchor='w', width=1)
+        self.mmproj_hint.pack(fill='x', pady=(4, 0))
         self._mmproj_hint_tt = ToolTip(self.mmproj_hint, '')
+        field(vision, 2, 0, '模板额外参数', '合法 JSON 对象，例如 {"enable_thinking":false}。',
+              'w_chat_template_kwargs', placeholder='如 {"enable_thinking":false}', span=2)
+        box = field(vision, 3, 0, 'Gemma 兼容模板', '只有旧版 Gemma 需要外部模板，新版自带模板无需勾选。', span=2)
+        self.gemma_chk = ctk.CTkCheckBox(box, height=36, checkbox_width=26, checkbox_height=26, text='使用旧版 Gemma 外部模板', command=self.on_gemma_toggle)
+        self.gemma_chk.pack(anchor='w', pady=4)
+        box = field(service, 0, 0, '监听地址', '127.0.0.1 仅本机；0.0.0.0 允许局域网访问（配合防火墙）。')
+        self.host_sel = ctk.CTkOptionMenu(box, values=['（默认）', '127.0.0.1', '0.0.0.0'],
+                                         height=40, command=lambda _: self.update_host_hint())
+        self.host_sel.pack(fill='x')
+        self.host_hint = ctk.CTkLabel(box, text='', height=18, text_color=UI['muted'], anchor='w')
+        self.host_hint.pack(fill='x')
+        field(service, 1, 0, 'CORS 允许源', '跨域访问允许的来源，多个用逗号分隔；留空不传。',
+              'w_cors', placeholder='* 或 http://localhost:3000', span=2)
+        self._field_tabs.update(ctx_input=basic, parallel_sel=basic, host_sel=service)
+        self._field_labels.update({'上下文长度': 'ctx_input', '并行请求': 'parallel_sel',
+                                   '温度': 'w_temp', '监听地址': 'host_sel'})
 
-        # 图像 Min Tokens（--image-min-tokens）：视觉模型动态分辨率下每个图像最少 token 数（多模态下方）
-        self.w_image_min_tokens = ctk.CTkEntry(pf, width=170, placeholder_text='留空=llama 默认')
-        add_pair(7, 2, '图像 Min Tokens', '视觉/多模态模型（动态分辨率）每个图像最少生成的 token 数（--image-min-tokens）。值越小图像细节越少、越省显存/越快；越大越清晰、越占显存。留空=不传（llama 从模型读取默认）。存为预设参数。', self.w_image_min_tokens)
-
-        # Gemma 模型（可选勾选，替代仅按文件名判断；多模态/图像 Min Tokens 下方一格）
-        self.gemma_chk = ctk.CTkCheckBox(pf, text='Gemma 模型', command=self.on_gemma_toggle)
-        self.gemma_chk.grid(row=8, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.gemma_chk, '旧版 Gemma（gemma-2b/7b、translategemma 等）需要外部 --chat-template-file（gemma_chat_template.jinja），且建议低温；新 gemma3/4 自带模板、无需勾选。默认关，勾过一次按模型记住；存为预设参数。')
-
-        # KV 不卸载到 GPU（--no-kv-offload）：默认关；勾选后 KV 留系统内存，腾显存给模型层/上下文
-        self.no_kv_chk = ctk.CTkCheckBox(pf, text='KV 不卸载到 GPU', command=self.on_no_kv_toggle)
-        self.no_kv_chk.grid(row=9, column=2, columnspan=2, padx=(14, 6), pady=5, sticky='w')
-        ToolTip(self.no_kv_chk, '勾选 = 启动带 --no-kv-offload：KV 缓存不卸载到 GPU（留在系统内存），腾出显存给更多模型层或更大上下文——MoE 模型、显存紧张时用。默认不勾选（KV 在显存，速度最快）。存为预设参数。')
-
-        self.bar = ctk.CTkFrame(self)
-        self.bar.grid(row=2, column=0, sticky='ew', padx=12, pady=6)
-        self.bar.grid_columnconfigure(3, weight=1)
-        ctk.CTkButton(self.bar, text='▶ 启动', fg_color='#2f7a50', hover_color='#358a5c', width=110, command=self.start).grid(row=0, column=0, padx=12, pady=10)
-        ctk.CTkButton(self.bar, text='■ 停止', fg_color='#8a3f3f', hover_color='#9a4848', width=110, command=self.stop).grid(row=0, column=1, padx=6, pady=10)
-        ctk.CTkButton(self.bar, text='清屏', fg_color='#3d4552', hover_color='#4a5464', width=110, command=self.clear_log).grid(row=0, column=2, padx=6, pady=10)
-        self.status_lab = ctk.CTkLabel(self.bar, text='● 未运行', text_color='#e07070')
-        self.status_lab.grid(row=0, column=4, padx=12, pady=10, sticky='e')
-        ctk.CTkButton(self.bar, text='⚙ 设置', width=64, fg_color='#4a5568', hover_color='#556271', command=self.open_settings).grid(row=0, column=6, padx=(4, 12), pady=10)
-
-        f2 = tk.Frame(self.pw, bg='#242424')
-        log_head = tk.Frame(f2, bg='#242424')
-        log_head.pack(fill='x')
-        ctk.CTkLabel(log_head, text='日志', anchor='w', text_color='#8a93a6', font=('Microsoft YaHei', 12)).pack(side='left', padx=(8, 0))
+        f2 = tk.Frame(self.pw, bg=UI['panel'])
+        log_head = ctk.CTkFrame(f2, fg_color='transparent')
+        log_head.pack(fill='x', padx=12, pady=(8, 0))
+        ctk.CTkLabel(log_head, text='运行日志', anchor='w', font=('Microsoft YaHei', 15, 'bold')).pack(side='left')
+        self.clear_btn = button(log_head, '清空', self.clear_log, 54)
+        self.clear_btn.pack(side='right')
+        self.copy_api_btn = button(log_head, '复制 API', self.copy_api, 82, role='teal')
+        self.copy_api_btn.pack(side='right', padx=6)
         self.svc_info = tk.Text(f2, wrap='word', height=1, bd=0, highlightthickness=0,
-                                relief='flat', padx=2, pady=1, bg='#242424', fg='#9aa4b8',
-                                font=('Consolas', 11), takefocus=0)
-        self.svc_info.pack(fill='x', padx=8, pady=(4, 2))
+            relief='flat', padx=2, pady=2, bg=UI['panel'], fg=UI['muted'], font=('Microsoft YaHei', 12), takefocus=0)
+        self.svc_info.pack(fill='x', padx=12, pady=(4, 6))
         self.svc_info.bind('<Key>', self._svc_readonly)
         self.svc_info.bind('<Configure>', lambda _: self._svc_sync_height())
+        self.log_box = ctk.CTkTextbox(f2, state='disabled', wrap='word', font=('Microsoft YaHei', 14),
+                                      fg_color=UI['bg'], text_color=UI['text'], corner_radius=8)
+        self.log_box.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self.pw.add(f2, weight=2)
         self._set_svc_idle()
-        self.log_box = ctk.CTkTextbox(f2, state='disabled', wrap='none', font=('Consolas', 12))
-        self.log_box.pack(fill='both', expand=True)
-        self.pw.add(f2, weight=1)
+
+        self.bar = ctk.CTkFrame(self, fg_color=UI['panel'], corner_radius=12)
+        self.bar.grid(row=2, column=0, sticky='ew', padx=16, pady=(8, 16))
+        self.bar.grid_columnconfigure(0, weight=1)
+        self.status_lab = ctk.CTkLabel(self.bar, text='● 未运行', text_color=UI['muted'], anchor='w')
+        self.status_lab.grid(row=0, column=0, sticky='ew', padx=16, pady=12)
+        self.stop_btn = button(self.bar, '停止服务', self.stop, 100, role='red')
+        self.stop_btn.configure(height=44)
+        self.stop_btn.grid(row=0, column=1, padx=8, pady=12)
+        self.start_btn = button(self.bar, '启动服务', self.start, 120, role='green')
+        self.start_btn.configure(height=44)
+        self.start_btn.grid(row=0, column=2, padx=(0, 16), pady=12)
+        ToolTip(self.start_btn, '启动当前模型；Ctrl+Enter 启动')
         self._bind_param_edit_marker()
+        self.bind('<Control-s>', lambda _: self.save_preset())
+        self.bind('<Control-Return>', lambda _: self.start())
+        self._sync_action_controls()
 
     def _bind_param_edit_marker(self):
-        def mark(_=None):
-            self._set_param_src('✏ 手动调整', '#e8b04a')
-
         def wrap(menu):
             try:
                 orig = menu.cget('command')
@@ -810,22 +896,76 @@ class App(ctk.CTk):
                         orig(val)
                 except Exception:
                     pass
-                mark()
+                self._mark_param_edited()
             menu.configure(command=handler)
 
-        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch,
-                  self.w_reasoning_budget, self.w_reasoning_format, self.mmproj_sel, self.w_cors,
-                  self.w_image_min_tokens, self.w_min_p, self.w_chat_template_kwargs]:
+        for w in [self.ctx_input, self.parallel_sel, self.host_sel, self.gpu_sel, self.w_n_batch, self.w_n_ubatch,
+                   self.w_reasoning_budget, self.w_reasoning_format, self.mmproj_sel, self.w_cors,
+                   self.w_image_min_tokens, self.w_top_k, self.w_min_p, self.w_cache_reuse,
+                   self.w_chat_template_kwargs]:
             if isinstance(w, ctk.CTkEntry):
-                w.bind('<KeyRelease>', mark)
+                w.bind('<KeyRelease>', self._mark_param_edited, add='+')
             elif isinstance(w, ctk.CTkOptionMenu):
                 wrap(w)
         for pp in PARAMS:
             w = getattr(self, 'w_' + pp['k'], None)
             if isinstance(w, ctk.CTkEntry):
-                w.bind('<KeyRelease>', mark)
+                w.bind('<KeyRelease>', self._mark_param_edited, add='+')
             elif isinstance(w, ctk.CTkOptionMenu):
                 wrap(w)
+        wrap(self.ctx_preset)
+
+    def _mark_param_edited(self, event=None):
+        if event is not None and event.keysym in ('Tab', 'Shift_L', 'Shift_R', 'Control_L',
+                                                   'Control_R', 'Left', 'Right', 'Up', 'Down'):
+            return
+        self._preset_locked = True
+        self._set_param_src('✏ 手动调整 · 保存预设以保留', UI['warning'])
+
+    def _sync_action_controls(self):
+        active = self._closing or self._service_state in ('running', 'stopping')
+        has_model = bool(self.current_model)
+        self._set_button_state(self.start_btn, not active and has_model)
+        self._set_button_state(self.stop_btn, self._service_state == 'running',
+                               text='正在停止…' if self._service_state == 'stopping' else '停止服务')
+        self._set_button_state(self.compute_btn, has_model)
+        self._set_button_state(self.save_btn, has_model)
+        self._set_button_state(self.copy_api_btn, bool(self._api_base))
+
+    @staticmethod
+    def _set_button_state(widget, enabled, **options):
+        colors = getattr(widget, '_action_colors', None)
+        if colors:
+            options['fg_color'] = colors[0] if enabled else colors[2]
+        widget.configure(state='normal' if enabled else 'disabled', **options)
+
+    def _set_service_state(self, state, text=None):
+        self._service_state = state
+        color = UI['success'] if state == 'running' else UI['warning'] if state == 'stopping' else UI['muted']
+        self.status_lab.configure(text=text or {'idle': '● 未运行', 'running': '● 进程运行中',
+                                                'stopping': '● 正在停止…'}[state], text_color=color)
+        self._sync_action_controls()
+
+    def copy_api(self):
+        if self._api_base:
+            self.clipboard_clear()
+            self.clipboard_append(self._api_base)
+            self.append_log('>>> API 地址已复制：' + self._api_base)
+
+    def _show_parameter_error(self, error):
+        self.append_log('!!! ' + str(error))
+        attr = self._field_labels.get(getattr(error, 'label', ''))
+        if attr:
+            self.param_tabs.set(self._field_tabs[attr])
+            widget = getattr(self, attr)
+            # 滚动至出错字段，避免隐藏标签页中的输入错误只能从日志里猜。
+            self.update_idletasks()
+            pf = self.param_frames[self._field_tabs[attr]]
+            y = widget.winfo_rooty() - pf.winfo_rooty()
+            pf._parent_canvas.yview_moveto(max(0, y - 28) / max(1, pf.winfo_height()))
+            widget.focus_set()
+            if isinstance(widget, ctk.CTkEntry):
+                widget.select_range(0, 'end')
 
     def _set_param_src(self, text, color, tip=None):
         """设置参数来源标识（⚡自动计算/📌预设/✏手动调整）。超长截断避免把
@@ -858,13 +998,18 @@ class App(ctk.CTk):
         m = last if (last and last in ms) else (ms[0] if ms else None)
         self.model_sel.set(m if m else '（models 目录为空）')
         self.current_model = m
+        self._model_tooltip.text = m or '暂无模型，请在设置中选择模型文件夹'
+        self._model_tooltip.lab.configure(text=self._model_tooltip.text)
+        self._sync_action_controls()
 
     def refresh_models(self):
         """⟳ 按钮：强制重扫 models/ 目录。后台线程扫描，结果经 _q 回主线程，不阻塞 UI。"""
         if not os.path.isdir(MODELS_DIR):
             self.append_log('!!! models 目录不存在：' + os.path.normpath(MODELS_DIR))
             return
-        self.refresh_btn.configure(state='disabled', text='⏳')
+        if self.refresh_btn.cget('state') == 'disabled':
+            return
+        self._set_button_state(self.refresh_btn, False, text='扫描中')
         self.append_log('>>> 正在刷新模型列表…')
 
         def work():
@@ -877,7 +1022,7 @@ class App(ctk.CTk):
 
     def _apply_refreshed_models(self, ms, err):
         # 主线程：刷新完成。恢复按钮；当前选中的模型还在列表里就保持不变，否则回落第一个
-        self.refresh_btn.configure(state='normal', text='⟳')
+        self._set_button_state(self.refresh_btn, True, text='刷新')
         if err:
             self.append_log('!!! 刷新模型列表失败: ' + err)
             return
@@ -886,6 +1031,7 @@ class App(ctk.CTk):
         self.model_sel.configure(values=ms if ms else ['（models 目录为空）'])
         if keep:
             self.model_sel.set(keep)
+            self.refresh_mmproj_menu()
             self.append_log(f'>>> 模型列表已刷新：{len(ms)} 个模型（保持选中 {keep}）')
         elif ms:
             self.model_sel.set(ms[0])
@@ -896,12 +1042,22 @@ class App(ctk.CTk):
             self.model_sel.set('（models 目录为空）')
             self.current_model = None
             self.append_log('>>> 模型列表已刷新：models 目录为空')
+            self.on_model_change()
 
     def on_model_change(self):
         m = self.model_sel.get()
         if not m or m.startswith('（'):
+            self.current_model = None
+            self._preset_locked = True
+            self.refresh_preset_menu()
+            self.refresh_mmproj_menu()
+            self._set_param_src('暂无模型 · 请在设置中选择模型文件夹', UI['muted'])
+            self._sync_action_controls()
             return
         self.current_model = m
+        self._model_tooltip.text = m
+        self._model_tooltip.lab.configure(text=m)
+        self._sync_action_controls()
         stem = m[:-5] if m.lower().endswith('.gguf') else m
         self.refresh_preset_menu()
         self.cat_sel.set(self.get_category(m))
@@ -948,18 +1104,21 @@ class App(ctk.CTk):
                 self.append_log(f'>>> 已自动生成 Gemma 聊天模板：{JINJA}')
             except Exception as e:
                 self.append_log(f'!!! 生成 Gemma 聊天模板失败: {e}')
-        self._preset_locked = False   # 用户主动切换 → 重新按 gemma 计算
-        self.apply_computed_defaults()   # gemma 会影响温度/输出长度
+        self._mark_param_edited()
+        self.append_log('>>> Gemma 兼容模板已更新；如需重置温度等参数，请点击「应用默认」')
 
     def on_thinking_toggle(self):
+        self._mark_param_edited()
         checked = bool(self.think_chk.get())
         self.append_log(f'>>> 思考模式：{"开" if checked else "关"}（存为预设时随预设一起保存）')
 
     def on_mm_toggle(self):
+        self._mark_param_edited()
         checked = bool(self.mm_chk.get())
         self.append_log(f'>>> 多模态：{"开" if checked else "关"}（存为预设时随预设一起保存）')
 
     def on_no_kv_toggle(self):
+        self._mark_param_edited()
         checked = bool(self.no_kv_chk.get())
         self.append_log(f'>>> KV 不卸载到 GPU：{"开" if checked else "关"}（存为预设时随预设一起保存）')
 
@@ -1021,46 +1180,7 @@ class App(ctk.CTk):
         save_cfg(self.cfg)
 
     def compute_defaults(self, model, category, cur_port=''):
-        """按本机显存 + 模型大小（+ GGUF 架构元数据）自动计算默认参数。返回 (params, 说明)。
-        - 模型整体装得下 → ngl=999，按剩余显存 ÷ KV每token 精确算上下文
-        - 模型大于显存 → 部分卸载（能装下的层数进 GPU，MoE 尤其受益），比纯 CPU 快很多
-        - KV 每 token 字节数优先从 GGUF 元数据算（q8_0=1 字节/元素），读不到用 0.5GB/4K 启发式"""
-        vram_gb = self.get_vram_gb()
-        path = os.path.join(MODELS_DIR, model)
-        try:
-            model_gb = os.path.getsize(path) / (1024 ** 3)
-        except Exception:
-            model_gb = 0
-        arch = read_model_arch(path)
-        kv_per_token = arch['kv_per_token'] if arch else 0
-        if not kv_per_token:
-            kv_per_token = int(0.5 * (1024 ** 3) / 4096)   # 启发式兜底：0.5GB/4K（q8_0 粗估）
-        reserve = 1.5   # 预留显存：计算缓冲 / 激活 / 碎片
-        ngl, ctx = 0, 32768
-        detail = '（缺显存/模型信息，回退保守参数）'
-        if vram_gb > 0 and model_gb > 0:
-            if model_gb + reserve <= vram_gb:
-                ngl = 999
-                kv_budget = max(0.5, vram_gb - model_gb - reserve)
-                ctx = int(kv_budget * (1024 ** 3) / kv_per_token)
-                ctx = max(2048, min(65536, ctx))
-                detail = f'模型 {model_gb:.1f}G 可整体进显存，KV 预算 {kv_budget:.1f}G'
-            else:
-                # 模型 > 显存：部分卸载。目标 ctx 下 KV 随层均分 GPU，算能装下的层数
-                nl = arch['n_layers'] if arch else 0
-                target_ctx = 8192
-                if nl and nl > 1:
-                    kv_gb = target_ctx * kv_per_token / (1024 ** 3)
-                    denom = model_gb + kv_gb + reserve
-                    frac = (vram_gb - reserve) / denom if denom > 0 else 0
-                    frac = min(0.999, max(0.05, frac))
-                    ngl = max(1, min(int(frac * nl), nl - 1))
-                    ctx = target_ctx
-                    detail = f'模型 {model_gb:.1f}G > 显存 {vram_gb:.1f}G，部分卸载 {ngl}/{nl} 层'
-                    if arch['is_moe']:
-                        detail += '（MoE，KV 小、卸载效率高）'
-                else:
-                    detail = f'模型 {model_gb:.1f}G > 显存 {vram_gb:.1f}G，无法读层数，回退纯 CPU'
+        """计算用途预设；显存、上下文与 GPU 卸载交给 llama.cpp --fit。"""
         cat = {
             '聊天':     {'temp': 0.7,  'top_p': 0.9,  'n_predict': 1024},
             '通用':     {'temp': 0.6,  'top_p': 0.9,  'n_predict': 2048},
@@ -1068,53 +1188,86 @@ class App(ctk.CTk):
             '角色扮演': {'temp': 0.8,  'top_p': 0.95, 'n_predict': 1024},
             '文学创作': {'temp': 0.75, 'top_p': 0.95, 'n_predict': 2048},
             '编程':     {'temp': 0.2,  'top_p': 0.9,  'n_predict': 4096},
+            FIM_CATEGORY: {'temp': 0.0, 'top_p': 0.99, 'n_predict': 128},
             'Agent':    {'temp': 0.3,  'top_p': 0.9,  'n_predict': 2048},
         }.get(category, {'temp': 0.5, 'top_p': 0.9, 'n_predict': 2048})
-        if self.is_gemma(model):
+        is_fim = category == FIM_CATEGORY
+        if self.is_gemma(model) and not is_fim:
             # Gemma 特适配：低温度 + 长输出（需 --chat-template-file）
             cat = {'temp': 0.1, 'top_p': 0.9, 'n_predict': 4096}
+        detail = 'ctx/ngl 留空，由 llama.cpp --fit 按启动时可用显存拟合'
+        if is_fim:
+            detail += '；FIM：batch 1024 / ubatch 512 / q8_0 KV / cache reuse 256'
         # 端口不随自动计算覆盖：保留当前输入；未设则用设置里的默认端口（兜底 llama 默认 8080）
         port = cur_port or str(self.cfg.get('default_port') or 8080)
-        return ({'ctx': ctx, 'ngl': ngl, 'flash': 'on', 'cache': 'q8_0',
+        return ({'ctx': '', 'ngl': '', 'flash': 'auto', 'cache': 'q8_0' if is_fim else '',
                  'temp': cat['temp'], 'top_p': cat['top_p'], 'n_predict': cat['n_predict'],
                  'parallel': 1, 'port': port, 'host': '127.0.0.1',
-                 'gpu': '自动', 'n_batch': '', 'thinking': True, 'gemma': self.is_gemma(model),
+                 'gpu': '自动', 'n_batch': 1024 if is_fim else '', 'n_ubatch': 512 if is_fim else '',
+                 'thinking': not is_fim, 'gemma': self.is_gemma(model) and not is_fim,
                  'mm': False, 'cors': '', 'image_min_tokens': '', 'no_kv_offload': False,
-                 'min_p': '', 'chat_template_kwargs': '', 'reasoning_format': ''},
+                 'top_k': 40 if is_fim else '', 'min_p': '', 'cache_reuse': 256 if is_fim else '',
+                 'chat_template_kwargs': '', 'reasoning_format': ''},
                 detail)
 
     def _poll_q(self):
         # 主线程轮询工作线程结果（tkinter 的 after 不能从子线程调）
-        while True:
+        if self._closed:
+            return
+        for _ in range(300):   # 连续日志输出时仍给鼠标、重绘和停止操作留出事件循环时间
             try:
                 item = self._q.get_nowait()
             except queue.Empty:
                 break
             try:
                 kind = item[0]
-                if kind == 'params':
-                    _, model, cat, params, vram, force, detail = item
-                    self._save_computed_defaults(model, params)
-                    if self.current_model == model and (force or not self._preset_locked):
-                        self.set_params(params)
-                        self._set_param_src('⚡ 自动计算', '#8ab4f8', tip=f'{vram}G 显存 + 模型大小 自动计算\n{detail}')
-                        self.append_log(f'>>> 按显存 {vram}G + 模型大小计算默认参数（{cat}）：{detail}')
-                elif kind == 'gpus':
+                if kind == 'gpus':
                     _, gpus = item
                     self._apply_gpus(gpus)
                 elif kind == 'hardware':
-                    _, vram, gpus, then_compute = item
+                    _, vram, gpus = item
+                    self.cfg['hardware'] = {'vram_gb': vram, 'gpus': gpus}
+                    save_cfg(self.cfg)
+                    selected = self.gpu_sel.get()
                     self._apply_gpus(gpus)
-                    if then_compute:
-                        self.apply_computed_defaults()
+                    if selected in self.gpu_sel.cget('values'):
+                        self.gpu_sel.set(selected)
+                        self._update_gpu_tip()
+                    self._finish_hardware_check()
+                    self.append_log(f'>>> 硬件检测完成：{len(gpus)} 张显卡，显存 {vram:g} GB')
                 elif kind == 'models':
                     _, ms, err = item
                     self._apply_refreshed_models(ms, err)
                 elif kind == 'error':
                     self.append_log('!!! ' + item[1])
+                elif kind == 'hardware_error':
+                    self._finish_hardware_check()
+                    self.append_log('!!! 检测本机硬件失败: ' + item[1])
+                elif kind == 'log':
+                    _, proc, line = item
+                    if proc is self.proc:
+                        self.append_log(line)
+                elif kind == 'exited':
+                    _, proc, code = item
+                    if proc is self.proc:
+                        self.append_log(f'>>> 服务进程已退出（退出码 {code}）')
+                        self._mark_stopped(proc)
+                        if self._closed:
+                            return
+                elif kind == 'stop_error':
+                    _, proc, error = item
+                    if proc is self.proc:
+                        self.append_log('!!! 停止失败: ' + error)
+                        self._closing = False
+                        self._set_service_state('running')
             except Exception as e:
+                if self._closed:
+                    return
+                if item[0] in ('hardware', 'hardware_error'):
+                    self._finish_hardware_check()
                 self.append_log(f'!!! 处理后台结果出错: {e}')
-        self.after(100, self._poll_q)
+        if not self._closed:
+            self.after(50, self._poll_q)
 
     def get_vram_gb(self):
         return self.cfg.get('hardware', {}).get('vram_gb', 0)
@@ -1122,16 +1275,22 @@ class App(ctk.CTk):
     def get_cached_gpus(self):
         return self.cfg.get('hardware', {}).get('gpus', [])
 
-    def _detect_and_save_hardware(self, then_compute=True):
+    def _finish_hardware_check(self):
+        self._hardware_busy = False
+        self._set_button_state(self.recheck_btn, True, text='检测硬件')
+
+    def _detect_and_save_hardware(self):
+        if self._hardware_busy:
+            return
+        self._hardware_busy = True
+        self._set_button_state(self.recheck_btn, False, text='检测中…')
         def work():
             try:
                 vram = detect_vram_gb()
                 gpus = detect_gpus()
-                self.cfg['hardware'] = {'vram_gb': vram, 'gpus': gpus}
-                save_cfg(self.cfg)
-                self._q.put(('hardware', vram, gpus, then_compute))
+                self._q.put(('hardware', vram, gpus))
             except Exception as e:
-                self._q.put(('error', f'检测本机硬件失败: {e}'))
+                self._q.put(('hardware_error', str(e)))
         threading.Thread(target=work, daemon=True).start()
 
     def _startup_hardware(self):
@@ -1139,36 +1298,36 @@ class App(ctk.CTk):
         if self.cfg.get('hardware', {}).get('vram_gb'):
             self._apply_gpus(self.get_cached_gpus())
         else:
-            self._detect_and_save_hardware(then_compute=True)
+            self._detect_and_save_hardware()
 
     def _check_server(self):
         # 启动后检查 llama-server.exe：缺失不阻塞界面，只提示 + 记日志（可在「设置」里改路径）
         exe = self.cfg.get('server_path') or SERVER_EXE
         if os.path.exists(exe):
             return
-        msg = ('未找到 llama-server.exe\n请在「设置」里选择 llama 路径，'
-               '或把它放到程序同目录：\n' + os.path.normpath(BASE))
         self.append_log('!!! 未找到 llama-server.exe（请在「设置」里配置路径，或放到程序同目录）')
-        messagebox.showwarning('LLM GUI', msg)
+        self._set_service_state('idle', '● 请在设置中选择 llama-server.exe')
 
     def recheck_hardware(self):
-        self._detect_and_save_hardware(then_compute=True)
+        self._detect_and_save_hardware()
 
     def apply_computed_defaults(self, model=None, force=False):
         model = model or self.current_model
         if not model:
             return
+        if self._preset_locked and not force:
+            return
         cat = self.get_category(model)
-        cur_port = self.w_port.get().strip()   # 主线程读端口再传后台线程（widget 不能跨线程访问）
-
-        def work():
-            try:
-                params, detail = self.compute_defaults(model, cat, cur_port)
-                self._q.put(('params', model, cat, params, self.get_vram_gb(), force, detail))
-            except Exception as e:
-                self._q.put(('error', f'计算默认参数失败: {e}'))
-
-        threading.Thread(target=work, daemon=True).start()
+        # 用途预设只是字典计算，在主线程立即应用，避免延迟结果覆盖新的用户输入。
+        try:
+            params, detail = self.compute_defaults(model, cat, self.w_port.get().strip())
+            self.set_params(params)
+            self._preset_locked = False
+            self._save_computed_defaults(model, params)
+            self._set_param_src(f'⚡ 用途默认 · {cat}', UI['accent'], tip=detail)
+            self.append_log(f'>>> 已应用用途预设（{cat}）：{detail}')
+        except Exception as e:
+            self.append_log(f'!!! 计算默认参数失败: {e}')
 
     def _save_computed_defaults(self, model, params):
         try:
@@ -1195,11 +1354,8 @@ class App(ctk.CTk):
     def update_preset_controls(self):
         sel = self.preset_sel.get()
         enabled = bool(sel and sel != '（无预设）')
-        self.del_btn.configure(state='normal' if enabled else 'disabled')
-        if enabled:
-            self.del_btn.configure(fg_color='#c0392b', hover_color='#e74c3c')   # 可用：鲜艳红
-        else:
-            self.del_btn.configure(fg_color='#7a4a4a', hover_color='#8a5555')   # 不可用：暗红
+        self._set_button_state(self.del_btn, enabled)
+        self._set_button_state(self.rename_btn, enabled)
 
     def on_preset_load(self):
         n = self.preset_sel.get()
@@ -1217,6 +1373,7 @@ class App(ctk.CTk):
                 stem = m[:-5] if m.lower().endswith('.gguf') else m
                 self.preset_name.delete(0, 'end')
                 self.preset_name.insert(0, stem)
+                self._mark_param_edited()
         self.update_preset_controls()
 
     def set_params(self, p):
@@ -1257,10 +1414,13 @@ class App(ctk.CTk):
             else:
                 set_entry(w, v)
         set_entry(self.w_n_batch, p.get('n_batch'))
+        set_entry(self.w_n_ubatch, p.get('n_ubatch'))
         set_entry(self.w_cors, p.get('cors'))   # CORS 缺省=留空=不传
         set_entry(self.w_reasoning_budget, p.get('reasoning_budget'))
         set_entry(self.w_image_min_tokens, p.get('image_min_tokens'))
+        set_entry(self.w_top_k, p.get('top_k'))
         set_entry(self.w_min_p, p.get('min_p'))
+        set_entry(self.w_cache_reuse, p.get('cache_reuse'))
         set_entry(self.w_chat_template_kwargs, p.get('chat_template_kwargs'))
         set_menu(self.w_reasoning_format, p.get('reasoning_format'))
         if p.get('thinking', True):
@@ -1284,7 +1444,7 @@ class App(ctk.CTk):
             try:
                 return int(v)
             except (ValueError, TypeError):
-                raise ValueError(f'{k} 需要整数，当前值：{v!r}')
+                raise ParameterError(k, f'{k} 需要整数，当前值：{v!r}')
 
         def fltv(k, v):
             if v in ('', '（默认）'):
@@ -1292,7 +1452,7 @@ class App(ctk.CTk):
             try:
                 return float(v)
             except (ValueError, TypeError):
-                raise ValueError(f'{k} 需要数字，当前值：{v!r}')
+                raise ParameterError(k, f'{k} 需要数字，当前值：{v!r}')
 
         p = {
             'ctx': intv('上下文长度', self.ctx_input.get().strip()),
@@ -1306,11 +1466,14 @@ class App(ctk.CTk):
             'gpu': self.gpu_sel.get(),
             'temp': fltv('温度', self.w_temp.get().strip()),
             'top_p': fltv('top-p', self.w_top_p.get().strip()),
-            'n_batch': self.w_n_batch.get().strip(),
+            'n_batch': intv('批处理大小', self.w_n_batch.get().strip()),
+            'n_ubatch': intv('物理批次大小', self.w_n_ubatch.get().strip()),
             'cors': self.w_cors.get().strip(),
             'reasoning_budget': intv('推理预算', self.w_reasoning_budget.get().strip()),
             'image_min_tokens': intv('图像 Min Tokens', self.w_image_min_tokens.get().strip()),
+            'top_k': intv('top-k', self.w_top_k.get().strip()),
             'min_p': fltv('min-p', self.w_min_p.get().strip()),
+            'cache_reuse': intv('缓存复用', self.w_cache_reuse.get().strip()),
             'chat_template_kwargs': self.w_chat_template_kwargs.get().strip(),
             'reasoning_format': '' if self.w_reasoning_format.get() == '（默认）' else self.w_reasoning_format.get(),
             'thinking': bool(self.think_chk.get()),
@@ -1318,6 +1481,21 @@ class App(ctk.CTk):
             'mm': bool(self.mm_chk.get()),
             'no_kv_offload': bool(self.no_kv_chk.get()),
         }
+        if p['port'] != '' and not 1 <= p['port'] <= 65535:
+            raise ParameterError('端口', '端口范围为 1～65535')
+        if p['n_batch'] != '' and p['n_ubatch'] != '' and p['n_ubatch'] > p['n_batch']:
+            raise ParameterError('物理批次大小', '物理批次大小不能大于批处理大小')
+        if p['chat_template_kwargs']:
+            try:
+                kwargs = json.loads(p['chat_template_kwargs'])
+            except ValueError:
+                raise ParameterError('模板额外参数', '模板额外参数需要合法 JSON 对象，例如 {"enable_thinking":false}')
+            if not isinstance(kwargs, dict):
+                raise ParameterError('模板额外参数', '模板额外参数必须是 JSON 对象')
+        try:
+            validate_fim_cache_reuse(self.cat_sel.get(), p['cache_reuse'], p['n_predict'])
+        except ValueError as e:
+            raise ParameterError('缓存复用', str(e)) from e
         return p
 
     def on_ctx_preset(self):
@@ -1448,7 +1626,7 @@ class App(ctk.CTk):
         try:
             params = self.read_params()
         except ValueError as e:
-            self.append_log('!!! ' + str(e)); return
+            self._show_parameter_error(e); return
         exists = name in self.presets.get(self.current_model, {})
 
         def do_save():
@@ -1471,14 +1649,21 @@ class App(ctk.CTk):
         n = self.preset_sel.get()
         if not n or n == '（无预设）' or not self.current_model:
             return
-        if n in self.presets.get(self.current_model, {}):
-            del self.presets[self.current_model][n]
+        model = self.current_model
+
+        def delete():
+            if n not in self.presets.get(model, {}):
+                return
+            del self.presets[model][n]
             save_presets(self.presets)
-            if self.cfg.get('last_preset', {}).get(self.current_model) == n:
-                self.cfg['last_preset'].pop(self.current_model, None)
+            if self.cfg.get('last_preset', {}).get(model) == n:
+                self.cfg['last_preset'].pop(model, None)
                 save_cfg(self.cfg)
-            self.refresh_preset_menu()
+            if self.current_model == model:
+                self.refresh_preset_menu()
+                self.on_preset_load()
             self.append_log(f'>>> 已删预设「{n}」')
+        self._confirm_dlg('删除预设', f'确认删除预设「{n}」？', delete)
 
     def rename_preset(self):
         n = self.preset_sel.get()
@@ -1505,6 +1690,7 @@ class App(ctk.CTk):
         self.preset_name.delete(0, 'end')
         self.preset_name.insert(0, new)
         self._set_param_src(f'📌 预设：{new}', '#e8c468', tip=new)
+        self.update_preset_controls()
         self.append_log(f'>>> 已重命名预设「{n}」→「{new}」')
 
     def find_orphan_presets(self):
@@ -1527,7 +1713,7 @@ class App(ctk.CTk):
         dlg.attributes('-topmost', True)
         if not orphans:
             ctk.CTkLabel(dlg, text='没有缺失模型的预设，全部有效', font=('Microsoft YaHei', 13)).pack(pady=40)
-            ctk.CTkButton(dlg, text='关闭', width=90, command=dlg.destroy).pack()
+            ctk.CTkButton(dlg, height=38, text='关闭', width=90, command=dlg.destroy).pack()
             return
         ctk.CTkLabel(dlg, text='以下模型的预设在本机 models/ 中不存在：', anchor='w',
                      font=('Microsoft YaHei', 12)).pack(pady=(14, 4), padx=16, anchor='w')
@@ -1539,12 +1725,12 @@ class App(ctk.CTk):
         box.configure(state='disabled')
         row = ctk.CTkFrame(dlg, fg_color='transparent')
         row.pack(pady=(8, 12))
-        ctk.CTkButton(row, text='保留', width=82, command=dlg.destroy).pack(side='left', padx=4)
-        ctk.CTkButton(row, text='删除无效', width=82, fg_color='#8a3f3f', hover_color='#9a4848',
+        ctk.CTkButton(row, height=38, text='保留', width=82, command=dlg.destroy).pack(side='left', padx=4)
+        ctk.CTkButton(row, height=38, text='删除无效', width=82, fg_color='#8a3f3f', hover_color='#9a4848',
                       command=lambda: self.delete_orphans(dlg)).pack(side='left', padx=4)
-        ctk.CTkButton(row, text='导出有效', width=82,
+        ctk.CTkButton(row, height=38, text='导出有效', width=82,
                       command=lambda: self.export_presets(True, dlg)).pack(side='left', padx=4)
-        ctk.CTkButton(row, text='导出无效', width=82,
+        ctk.CTkButton(row, height=38, text='导出无效', width=82,
                       command=lambda: self.export_presets(False, dlg)).pack(side='left', padx=4)
 
     def delete_orphans(self, dlg):
@@ -1665,8 +1851,8 @@ class App(ctk.CTk):
 
         row = ctk.CTkFrame(dlg, fg_color='transparent')
         row.pack(pady=10)
-        ctk.CTkButton(row, text='覆盖导入的', width=110, command=lambda: choose('overwrite')).pack(side='left', padx=6)
-        ctk.CTkButton(row, text='保留现有的', width=110, command=lambda: choose('skip')).pack(side='left', padx=6)
+        ctk.CTkButton(row, height=38, text='覆盖导入的', width=110, command=lambda: choose('overwrite')).pack(side='left', padx=6)
+        ctk.CTkButton(row, height=38, text='保留现有的', width=110, command=lambda: choose('skip')).pack(side='left', padx=6)
 
     def manage_presets_all(self):
         self._preset_chks = {}
@@ -1680,7 +1866,7 @@ class App(ctk.CTk):
         dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
         ctk.CTkLabel(dlg, text='按模型分组，勾选预设后可批量删除', anchor='w',
-                     text_color='#9aa4b8', font=('Microsoft YaHei', 11)).pack(pady=(14, 4), padx=16, anchor='w')
+                     text_color=UI['muted'], font=('Microsoft YaHei', 11)).pack(pady=(14, 4), padx=16, anchor='w')
         sf = ctk.CTkScrollableFrame(dlg, width=500, height=380)
         sf.pack(fill='both', expand=True, padx=16, pady=4)
         for model in sorted(self.presets.keys()):
@@ -1706,14 +1892,14 @@ class App(ctk.CTk):
             for chk in self._preset_chks.values():
                 chk.toggle()
 
-        ctk.CTkButton(bar, text='全选', width=70, command=lambda: set_all(True)).pack(side='left', padx=4)
-        ctk.CTkButton(bar, text='反选', width=70, command=invert).pack(side='left', padx=4)
-        ctk.CTkButton(bar, text='取消全选', width=90, command=lambda: set_all(False)).pack(side='left', padx=4)
-        ctk.CTkButton(bar, text='导出选中', width=90, fg_color='#3d6e5a', hover_color='#477a66',
+        ctk.CTkButton(bar, height=38, text='全选', width=70, command=lambda: set_all(True)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, height=38, text='反选', width=70, command=invert).pack(side='left', padx=4)
+        ctk.CTkButton(bar, height=38, text='取消全选', width=90, command=lambda: set_all(False)).pack(side='left', padx=4)
+        ctk.CTkButton(bar, height=38, text='导出选中', width=90, fg_color='#3d6e5a', hover_color='#477a66',
                       command=lambda: self.export_selected_presets(dlg)).pack(side='left', padx=4)
-        ctk.CTkButton(bar, text='删除选中', width=90, fg_color='#8a3f3f', hover_color='#9a4848',
+        ctk.CTkButton(bar, height=38, text='删除选中', width=90, fg_color='#8a3f3f', hover_color='#9a4848',
                       command=lambda: self.delete_selected_presets(dlg)).pack(side='right', padx=4)
-        ctk.CTkButton(bar, text='关闭', width=70, command=dlg.destroy).pack(side='right', padx=4)
+        ctk.CTkButton(bar, height=38, text='关闭', width=70, command=dlg.destroy).pack(side='right', padx=4)
 
     def export_selected_presets(self, dlg):
         """批量管理：把勾选的预设导出为 JSON（与统一文件的 presets 分区同构，可再导入）。"""
@@ -1784,8 +1970,8 @@ class App(ctk.CTk):
             dlg.destroy()
             callback()
 
-        ctk.CTkButton(btns, text='覆盖', width=96, fg_color='#2f7a50', hover_color='#358a5c', command=ok).pack(side='left', padx=10)
-        ctk.CTkButton(btns, text='取消', width=96, command=dlg.destroy).pack(side='left', padx=10)
+        ctk.CTkButton(btns, height=38, text='覆盖', width=96, fg_color='#2f7a50', hover_color='#358a5c', command=ok).pack(side='left', padx=10)
+        ctk.CTkButton(btns, height=38, text='取消', width=96, command=dlg.destroy).pack(side='left', padx=10)
 
     def _confirm_dlg(self, title, msg, on_yes, parent=None, yes_text='确认删除'):
         """二次确认弹窗：置顶居中 + 单例（已有确认窗则前置复用，不叠窗口）。
@@ -1832,13 +2018,19 @@ class App(ctk.CTk):
                 except Exception:
                     pass
 
-        ctk.CTkButton(btns, text=yes_text, width=110, fg_color='#8a3f3f',
+        ctk.CTkButton(btns, height=38, text=yes_text, width=110, fg_color='#8a3f3f',
                       hover_color='#9a4848', command=yes).pack(side='left', padx=8)
-        ctk.CTkButton(btns, text='取消', width=90, command=no).pack(side='left', padx=8)
+        ctk.CTkButton(btns, height=38, text='取消', width=90, command=no).pack(side='left', padx=8)
         self._confirm_open = dlg
 
     def open_settings(self):
+        existing = getattr(self, '_settings_dlg', None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
         dlg = ctk.CTkToplevel(self)
+        self._settings_dlg = dlg
         self._apply_icon(dlg)
         dlg.title('设置')
         dlg.geometry('460x560')   # 高度随后按内容自适应（auto-fit），此处仅给个保底
@@ -1862,7 +2054,7 @@ class App(ctk.CTk):
                      anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
         spf = ctk.CTkFrame(dlg, fg_color='transparent')
         spf.pack(padx=24, pady=(0, 6), fill='x')
-        sp_entry = ctk.CTkEntry(spf, placeholder_text='留空=程序同目录 llama-server.exe')
+        sp_entry = ctk.CTkEntry(spf, height=38, placeholder_text='留空=程序同目录 llama-server.exe')
         sp_entry.pack(side='left', fill='x', expand=True)
         sp_entry.insert(0, self.cfg.get('server_path', ''))
 
@@ -1875,7 +2067,7 @@ class App(ctk.CTk):
                 sp_entry.delete(0, 'end')
                 sp_entry.insert(0, p)
 
-        ctk.CTkButton(spf, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
+        ctk.CTkButton(spf, height=38, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
 
         # 模型文件夹（全局，留空=程序同目录 models）
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
@@ -1883,7 +2075,7 @@ class App(ctk.CTk):
                      anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
         mdf = ctk.CTkFrame(dlg, fg_color='transparent')
         mdf.pack(padx=24, pady=(0, 6), fill='x')
-        md_entry = ctk.CTkEntry(mdf, placeholder_text='留空=程序同目录 models')
+        md_entry = ctk.CTkEntry(mdf, height=38, placeholder_text='留空=程序同目录 models')
         md_entry.pack(side='left', fill='x', expand=True)
         md_entry.insert(0, self.cfg.get('models_dir', ''))
 
@@ -1895,22 +2087,18 @@ class App(ctk.CTk):
                 md_entry.delete(0, 'end')
                 md_entry.insert(0, p)
 
-        ctk.CTkButton(mdf, text='浏览…', width=70, command=browse_md).pack(side='left', padx=(6, 0))
+        ctk.CTkButton(mdf, height=38, text='浏览…', width=70, command=browse_md).pack(side='left', padx=(6, 0))
 
         # 默认端口（全局）：无预设自动计算时保留当前端口；未设端口时用它兜底
         dpf = ctk.CTkFrame(dlg, fg_color='transparent')
         dpf.pack(padx=24, pady=(8, 6), fill='x')
         ctk.CTkLabel(dpf, text='默认端口（全局）', width=130, anchor='w').pack(side='left')
-        dp_entry = ctk.CTkEntry(dpf, placeholder_text='留空=8080')
+        dp_entry = ctk.CTkEntry(dpf, height=38, placeholder_text='留空=8080')
         dp_entry.pack(side='left', padx=(8, 0), fill='x', expand=True)
         dp_entry.insert(0, str(self.cfg.get('default_port', '')))
 
         def save():
-            self.cfg['overwrite_ask'] = bool(ask.get())
-            self.cfg['remember_size'] = bool(sizebox.get())
-            self.cfg['server_path'] = sp_entry.get().strip()
             md = md_entry.get().strip()
-            self.cfg['models_dir'] = md   # 空=默认程序同目录 models
             dp = dp_entry.get().strip()
             if dp:
                 try:
@@ -1918,40 +2106,50 @@ class App(ctk.CTk):
                 except ValueError:
                     messagebox.showwarning('设置', '默认端口需为整数', parent=dlg)
                     return
+                if not 1 <= dp <= 65535:
+                    messagebox.showwarning('设置', '默认端口范围为 1～65535', parent=dlg)
+                    return
                 self.cfg['default_port'] = dp
             else:
                 self.cfg.pop('default_port', None)
+            self.cfg['overwrite_ask'] = bool(ask.get())
+            self.cfg['remember_size'] = bool(sizebox.get())
+            self.cfg['server_path'] = sp_entry.get().strip()
+            self.cfg['models_dir'] = md
             save_cfg(self.cfg)
             global MODELS_DIR
-            MODELS_DIR = md or os.path.join(BASE, 'models')
-            self.load_models()
-            self.refresh_mmproj_menu()
-            self.append_log('>>> 模型文件夹已切换：' + os.path.normpath(MODELS_DIR))
+            new_dir = md or os.path.join(BASE, 'models')
+            if os.path.normcase(os.path.abspath(new_dir)) != os.path.normcase(os.path.abspath(MODELS_DIR)):
+                MODELS_DIR = new_dir
+                self.load_models()
+                self.on_model_change()
+                self.append_log('>>> 模型文件夹已切换：' + os.path.normpath(MODELS_DIR))
+            self.append_log('>>> 设置已保存')
             dlg.destroy()
 
         # 保存按钮并入默认端口行（避免端口框过长、也省一整行高度）
-        ctk.CTkButton(dpf, text='保存', width=90, command=save).pack(side='left', padx=(8, 0))
+        ctk.CTkButton(dpf, height=38, text='保存', width=90, command=save).pack(side='left', padx=(8, 0))
 
         # 预设健康检查（打开设置即自动检查缺失模型的预设）
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
         n_orphan = len(self.find_orphan_presets())
         ctk.CTkLabel(dlg, text=f'预设健康检查：缺失模型的预设 {n_orphan} 个',
                      text_color='#e8b04a' if n_orphan else '#7fd9a0').pack(pady=(2, 4))
-        ctk.CTkButton(dlg, text='管理（保留 / 删除 / 导出有效 / 导出无效）', width=280,
+        ctk.CTkButton(dlg, height=38, text='管理（保留 / 删除 / 导出有效 / 导出无效）', width=280,
                       command=self.manage_orphan_presets).pack(pady=(0, 6))
         btns = ctk.CTkFrame(dlg, fg_color='transparent')
         btns.pack(pady=(0, 8))
-        ctk.CTkButton(btns, text='导入预设（合并）', width=132, command=self.import_presets).pack(side='left', padx=4)
-        ctk.CTkButton(btns, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
+        ctk.CTkButton(btns, height=38, text='导入预设（合并）', width=132, command=self.import_presets).pack(side='left', padx=4)
+        ctk.CTkButton(btns, height=38, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
 
         # 模型清单（弹出独立窗口）
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
-        ctk.CTkButton(dlg, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
+        ctk.CTkButton(dlg, height=38, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
 
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
         ctk.CTkLabel(dlg, text=f'LLM GUI · v{VERSION}', font=('Microsoft YaHei', 14, 'bold')).pack()
-        ctk.CTkLabel(dlg, text='llama-server 本地桌面启动器', text_color='#9aa4b8').pack(pady=(2, 0))
-        ctk.CTkLabel(dlg, text=f'GitHub：{GITHUB_USER}', text_color='#9aa4b8').pack(pady=(8, 0))
+        ctk.CTkLabel(dlg, text='llama-server 本地桌面启动器', text_color=UI['muted']).pack(pady=(2, 0))
+        ctk.CTkLabel(dlg, text=f'GitHub：{GITHUB_USER}', text_color=UI['muted']).pack(pady=(8, 0))
         link = ctk.CTkLabel(dlg, text=GITHUB_URL, text_color='#7db4ff', cursor='hand2', font=('Consolas', 11))
         link.pack(pady=(2, 0))
         link.bind('<Button-1>', lambda _: webbrowser.open(GITHUB_URL))
@@ -2004,12 +2202,18 @@ class App(ctk.CTk):
         box.configure(state='normal')
         box.insert('1.0', '\n'.join(lines) if lines else '（models 目录为空）')
         box.configure(state='disabled')
-        ctk.CTkButton(dlg, text='关闭', width=90, command=dlg.destroy).pack(pady=10)
+        ctk.CTkButton(dlg, height=38, text='关闭', width=90, command=dlg.destroy).pack(pady=10)
 
     def append_log(self, line):
+        follow = self.log_box._textbox.yview()[1] >= 0.98
         self.log_box.configure(state='normal')
         self.log_box.insert('end', line + '\n')
-        self.log_box.see('end')
+        # 限制长期运行的日志内存；查看历史时保留阅读位置。
+        count = int(self.log_box.index('end-1c').split('.')[0])
+        if count > 6000:
+            self.log_box.delete('1.0', f'{count - 5000}.0')
+        if follow:
+            self.log_box.see('end')
         self.log_box.configure(state='disabled')
 
     def clear_log(self):
@@ -2020,6 +2224,8 @@ class App(ctk.CTk):
     def update_svc_info(self, model, p):
         host = p.get('host') or '127.0.0.1'
         port = p.get('port') or 8080
+        self._api_base = f'http://127.0.0.1:{port}' if host == '0.0.0.0' else f'http://{host}:{port}'
+        self._sync_action_controls()
         if host == '0.0.0.0':
             hosts = ['127.0.0.1']
             ip = _lan_ip()
@@ -2032,17 +2238,18 @@ class App(ctk.CTk):
             return '（本机）' if h == '127.0.0.1' else '（局域网）'
 
         base = ' · '.join(f'http://{h}:{port}{tag(h)}' for h in hosts)
-        urls = ' · '.join(f'http://{h}:{port}{s}' for h in hosts for s in API_SUFFIXES)
         self.svc_info.delete('1.0', 'end')
-        self.svc_info.insert('1.0', f'模型：{clean_model_display(model)}\nAPI：{base}\n{urls}')
-        self.svc_info.tag_configure('body', foreground='#7fd9a0')
+        self.svc_info.insert('1.0', f'API：{base}\n端点：' + ' · '.join(API_SUFFIXES))
+        self.svc_info.tag_configure('body', foreground=UI['success'])
         self.svc_info.tag_add('body', '1.0', 'end')
         self._svc_sync_height()
 
     def _set_svc_idle(self):
+        self._api_base = ''
+        self._set_button_state(self.copy_api_btn, False)
         self.svc_info.delete('1.0', 'end')
-        self.svc_info.insert('1.0', '（未运行）')
-        self.svc_info.tag_configure('idle', foreground='#9aa4b8')
+        self.svc_info.insert('1.0', '启动服务后显示 API 地址 · 可直接复制用于客户端连接')
+        self.svc_info.tag_configure('idle', foreground=UI['muted'])
         self.svc_info.tag_add('idle', '1.0', 'end')
         self._svc_sync_height()
 
@@ -2093,6 +2300,8 @@ class App(ctk.CTk):
             args += ['--temp', str(p['temp'])]
         if val(p.get('top_p')):
             args += ['--top-p', str(p['top_p'])]
+        if val(p.get('top_k')):
+            args += ['--top-k', str(p['top_k'])]
         if val(p.get('min_p')):
             args += ['--min-p', str(p['min_p'])]
         if val(p.get('host')):
@@ -2106,6 +2315,10 @@ class App(ctk.CTk):
             args += ['--main-gpu', gpu.split(',')[0].strip()]
         if val(p.get('n_batch')):
             args += ['--batch-size', str(p['n_batch'])]
+        if val(p.get('n_ubatch')):
+            args += ['--ubatch-size', str(p['n_ubatch'])]
+        if val(p.get('cache_reuse')):
+            args += ['--cache-reuse', str(p['cache_reuse'])]
         if val(p.get('reasoning_budget')):
             args += ['--reasoning-budget', str(p['reasoning_budget'])]
         if val(p.get('reasoning_format')):
@@ -2135,6 +2348,8 @@ class App(ctk.CTk):
         return args
 
     def start(self):
+        if self._closing or self._service_state == 'stopping':
+            return
         if self.proc and self.proc.poll() is None:
             self.append_log('!!! 已有实例在运行，先停止'); return
         if not self.current_model or self.current_model.startswith('（'):
@@ -2149,7 +2364,7 @@ class App(ctk.CTk):
         try:
             p = self.read_params()
         except ValueError as e:
-            self.append_log('!!! ' + str(e)); return
+            self._show_parameter_error(e); return
         args = self.build_cmd(self.current_model, p)
         self.append_log('>>> 启动: ' + ' '.join(args))
         try:
@@ -2161,39 +2376,67 @@ class App(ctk.CTk):
         # 状态文本截断模型名：长名会把右侧「设置」按钮顶出窗口
         mname = clean_model_display(self.current_model)
         if len(mname) > 24: mname = mname[:22] + '…'
-        self.status_lab.configure(text=f'● 运行中 · {mname} · :{p.get("port") or 8080}', text_color='#7fd9a0')
+        self._set_service_state('running', f'● 进程运行中 · {mname} · :{p.get("port") or 8080}')
         self.update_svc_info(self.current_model, p)
-        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
 
-    def _read(self):
-        for line in iter(self.proc.stdout.readline, ''):
-            if line:
-                self.after(0, self.append_log, line.rstrip('\n'))
-        self.after(0, self.append_log, '>>> 服务进程已退出')
-        self.after(0, self._mark_stopped)
+    def _read(self, proc):
+        # 工作线程只写队列，固定进程引用，旧进程退出不会改写新实例的状态。
+        try:
+            with proc.stdout:
+                for line in proc.stdout:
+                    if line:
+                        self._q.put(('log', proc, line.rstrip('\n')))
+            code = proc.wait()
+            self._q.put(('exited', proc, code))
+        except Exception as e:
+            self._q.put(('log', proc, '!!! 读取服务日志失败: ' + str(e)))
+            # 即使日志管道异常，仍等进程退出后再允许启动新实例。
+            self._q.put(('exited', proc, proc.wait()))
 
-    def _mark_stopped(self):
-        self.status_lab.configure(text='● 未运行', text_color='#e07070')
+    def _mark_stopped(self, proc):
+        if proc is not self.proc:
+            return
+        self.proc = None
+        self._set_service_state('idle')
         self._set_svc_idle()
+        if self._closing:
+            self._finish_close()
 
     def stop(self):
+        if self._service_state == 'stopping':
+            return
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=8)
-            except Exception:
-                self.proc.kill()
-            self.append_log('>>> 已停止'); self._mark_stopped(); self.proc = None
+            proc = self.proc
+            self._set_service_state('stopping')
+            self.append_log('>>> 正在停止服务…')
+            threading.Thread(target=self._terminate_process, args=(proc,), daemon=True).start()
         else:
-            self.append_log('没有运行中的实例')
+            self._mark_stopped(self.proc)
+
+    def _terminate_process(self, proc):
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
+            self._q.put(('exited', proc, proc.returncode))
+        except Exception as e:
+            self._q.put(('stop_error', proc, str(e)))
 
     def on_close(self):
+        if self._closing:
+            return
         if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except Exception:
-                self.proc.kill()
+            self._closing = True
+            self.stop()
+        else:
+            self._finish_close()
+
+    def _finish_close(self):
+        self._closing = True
         if self.cfg.get('remember_size', True):
             try:
                 wxh = self.geometry().split('+')[0]   # 逻辑尺寸（反向缩放），避免 winfo×缩放复合放大
@@ -2206,6 +2449,11 @@ class App(ctk.CTk):
         if self.current_model:   # 记住上次选的模型，下次启动恢复
             self.cfg['last_model'] = self.current_model
             save_cfg(self.cfg)
+        self._closed = True
+        # 停止 tooltip、DPI 与队列计时器，避免销毁窗口后留下 Tcl 回调。
+        for callback in self.tk.call('after', 'info'):
+            # 只撤销计划，注册的 Tcl 命令由各自控件在 destroy 时清理。
+            self.tk.call('after', 'cancel', callback)
         self.destroy()
 
 

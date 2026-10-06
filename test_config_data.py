@@ -73,5 +73,88 @@ class ConfigDataTests(unittest.TestCase):
         self.assertEqual(data['defaults']['model.gguf']['revision'], 19)
 
 
+class CommandBuildingTests(unittest.TestCase):
+    @staticmethod
+    def _app():
+        app = object.__new__(llm_gui.App)
+        app.cfg = {'server_path': 'llama-server.exe'}
+        app.is_gemma = lambda _model: False
+        app.append_log = lambda _message: None
+        return app
+
+    def test_build_cmd_includes_top_k_ubatch_and_cache_reuse(self):
+        args = self._app().build_cmd('model.gguf', {
+            'top_k': 40,
+            'n_ubatch': 512,
+            'cache_reuse': 256,
+            'thinking': False,
+        })
+
+        self.assertIn(['--top-k', '40'], [args[i:i + 2] for i in range(len(args) - 1)])
+        self.assertIn(['--ubatch-size', '512'], [args[i:i + 2] for i in range(len(args) - 1)])
+        self.assertIn(['--cache-reuse', '256'], [args[i:i + 2] for i in range(len(args) - 1)])
+
+    def test_build_cmd_omits_blank_new_parameters(self):
+        args = self._app().build_cmd('model.gguf', {
+            'top_k': '',
+            'n_ubatch': '',
+            'cache_reuse': '',
+            'thinking': False,
+        })
+
+        self.assertNotIn('--top-k', args)
+        self.assertNotIn('--ubatch-size', args)
+        self.assertNotIn('--cache-reuse', args)
+
+
+class ComputedDefaultsTests(unittest.TestCase):
+    @staticmethod
+    def _app():
+        app = object.__new__(llm_gui.App)
+        app.cfg = {}
+        app.is_gemma = lambda _model: False
+        return app
+
+    def test_general_category_delegates_hardware_fit_to_llama(self):
+        app = self._app()
+        params, detail = app.compute_defaults('missing.gguf', '通用')
+        args = app.build_cmd('missing.gguf', params)
+
+        self.assertEqual(params['ctx'], '')
+        self.assertEqual(params['ngl'], '')
+        self.assertEqual(params['flash'], 'auto')
+        self.assertEqual(params['cache'], '')
+        self.assertNotIn('-c', args)
+        self.assertNotIn('-ngl', args)
+        self.assertNotIn('-ctk', args)
+        self.assertIn(['--flash-attn', 'auto'], [args[i:i + 2] for i in range(len(args) - 1)])
+        self.assertIn('--fit', detail)
+
+    def test_fim_category_applies_official_example_defaults(self):
+        params, detail = self._app().compute_defaults('missing.gguf', llm_gui.FIM_CATEGORY)
+
+        self.assertEqual(params['n_batch'], 1024)
+        self.assertEqual(params['n_ubatch'], 512)
+        self.assertEqual(params['cache_reuse'], 256)
+        self.assertEqual(params['n_predict'], 128)
+        self.assertEqual(params['temp'], 0.0)
+        self.assertEqual(params['top_k'], 40)
+        self.assertEqual(params['top_p'], 0.99)
+        self.assertEqual(params['parallel'], 1)
+        self.assertFalse(params['thinking'])
+        self.assertEqual(params['ctx'], '')
+        self.assertEqual(params['ngl'], '')
+        self.assertEqual(params['flash'], 'auto')
+        self.assertEqual(params['cache'], 'q8_0')
+        self.assertIn('FIM', detail)
+
+    def test_fim_cache_reuse_must_exceed_max_output(self):
+        with self.assertRaisesRegex(ValueError, '严格大于最大输出'):
+            llm_gui.validate_fim_cache_reuse(llm_gui.FIM_CATEGORY, 128, 128)
+        llm_gui.validate_fim_cache_reuse(llm_gui.FIM_CATEGORY, 256, 128)
+        llm_gui.validate_fim_cache_reuse(llm_gui.FIM_CATEGORY, 0, 128)
+        llm_gui.validate_fim_cache_reuse('聊天', 64, 128)
+
+
 if __name__ == '__main__':
     unittest.main()
