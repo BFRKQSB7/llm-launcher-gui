@@ -47,7 +47,7 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 
 Parameters are grouped into Runtime, Sampling & reasoning, Vision & templates, and Service connection tabs. Model/preset controls stay at the top and service controls stay at the bottom. Ctrl+Enter starts the service; Ctrl+S saves the preset. Hardware detection preserves manual edits, stop runs in the background, and Copy API copies the base URL. Invalid fields open in their corresponding tab; preset deletion requires confirmation.
 
-The interface uses 15-point Chinese text, larger controls, clear contrast, and action colors. The default window is approximately 940 × 880 and fits the available desktop work area; old window sizes are reset once, then custom resizing is remembered.
+The interface uses 15-point Chinese text, larger controls, clear contrast, and action colors. The default window is 780 × 786 and fits the available desktop work area; saved custom sizes continue to be remembered.
 
 > Preview uses a mock model and a controlled process; it does not demonstrate real inference.
 
@@ -89,8 +89,9 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
-- v1.12.2 (2026-10-15): fix the in-app "Update now" button doing nothing.
+- v1.12.2 (2026-10-15): fix the in-app "Update now" button doing nothing and set the default window size to 780 × 786.
   - Fix: clicking "Start update" in the confirmation dialog closed it but never started the download (an internal state dict was missing the button/status/progress handles, so the callback raised a `KeyError` that Tk swallowed). The whole chain — confirm → download with progress → SHA-256 verify → helper script → exit & replace → relaunch — now runs; after a failure the button becomes "Retry" and works again
+  - Change: new installs and first launch use a 780 × 786 default window; a previously saved custom size remains preferred
   - Test: new regression tests drive the real dialog code path (fail on the old code)
   - Note: v1.12.0 / v1.12.1 cannot self-update through this bug — download `LLMGUI.exe` from the Release page once; later versions update in place
 - v1.12.1 (2026-10-15): fix the Settings dialog overflowing and being placed off-screen.

@@ -103,7 +103,7 @@ def validate_fim_cache_reuse(category, cache_reuse, n_predict):
 API_SUFFIXES = ['/v1/chat/completions', '/v1/completions', '/v1/embeddings', '/health']
 
 DEFAULT_SASH_POS = 370   # 新布局为日志预留可读空间，实际位置按窗口高度约束
-DEFAULT_WINDOW_SIZE = (940, 880)   # 接近方形，给较大的参数控件与日志留出纵向空间
+DEFAULT_WINDOW_SIZE = (780, 786)   # 默认窗口尺寸，匹配用户提供的布局
 WINDOW_LAYOUT_VERSION = 1         # 首次使用新比例时重置旧尺寸/分割线，之后仍记住用户调整
 
 UI = dict(bg='#101827', panel='#182233', field='#25344a', border='#506078',
