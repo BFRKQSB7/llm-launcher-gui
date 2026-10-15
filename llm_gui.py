@@ -129,7 +129,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.12.0'
+VERSION = '1.12.1'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 UPDATE_API_URL = f'https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest'
@@ -1244,14 +1244,70 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    def _work_area_phys(self):
+        """主屏工作区（物理像素）：(left, top, width, height)。取不到时退回逻辑屏幕尺寸×缩放。"""
+        scale = self._get_window_scaling() or 1
+        left = top = 0
+        w = int(self.winfo_screenwidth() * scale)
+        h = int(self.winfo_screenheight() * scale)
+        if os.name == 'nt':
+            try:
+                import ctypes
+                from ctypes import wintypes
+                r = wintypes.RECT()
+                if ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(r), 0):
+                    left, top = r.left, r.top
+                    w, h = r.right - r.left, r.bottom - r.top
+            except Exception:
+                pass
+        return left, top, max(1, w), max(1, h)
+
+    def _window_chrome(self, w):
+        """返回窗口装饰的物理尺寸 (dx, dy, chrome_w, chrome_h)。
+
+        标题栏与边框位于客户区之外，所以 geometry() 的坐标是「外框左上角」，
+        而 winfo_rooty/width/height 描述的是客户区。做屏幕边界夹取必须用外框尺寸，
+        否则窗口底部会超出工作区（表现为标题栏/底部按钮被推到屏幕外）。取不到时返回 0。
+        """
+        if os.name != 'nt':
+            return 0, 0, 0, 0
+        try:
+            import ctypes
+            from ctypes import wintypes
+            w.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(w.winfo_id())
+            r = wintypes.RECT()
+            if not hwnd or not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                return 0, 0, 0, 0
+            fw, fh = r.right - r.left, r.bottom - r.top
+            cw, ch = w.winfo_width(), w.winfo_height()
+            dx = max(0, w.winfo_rootx() - r.left)
+            dy = max(0, w.winfo_rooty() - r.top)
+            return dx, dy, max(0, fw - cw), max(0, fh - ch)
+        except Exception:
+            return 0, 0, 0, 0
+
     def _center_on_main(self, w):
+        """把弹窗相对主窗口居中，并夹进工作区，避免高 DPI / 小屏下底部被裁到屏幕外。
+
+        注意：ctk 的 geometry() 里宽高是**逻辑**单位，而 winfo_rootx/rooty/width/height
+        是**物理**像素，且几何坐标指的是含标题栏的**外框**左上角。三者混算会导致窗口
+        被摆到屏幕外（表现为「打开设置后底部看不到，要手动把窗口往上拖」）。
+        """
         try:
             w.update_idletasks()
-            size = w.geometry().split('+')[0]   # 如 '420x560'
+            scale = w._get_window_scaling() or 1
+            size = w.geometry().split('+')[0]   # 逻辑尺寸，如 '460x844'
             W, H = map(int, size.split('x'))
-            x = self.winfo_rootx() + max(0, (self.winfo_width() - W) // 2)
-            y = self.winfo_rooty() + max(0, (self.winfo_height() - H) // 2)
-            w.geometry(f'{size}+{x}+{y}')
+            client_w, client_h = int(W * scale), int(H * scale)
+            _, _, chrome_w, chrome_h = self._window_chrome(w)
+            fw, fh = client_w + chrome_w, client_h + chrome_h   # 外框物理尺寸
+            x = self.winfo_rootx() + max(0, (self.winfo_width() - fw) // 2)
+            y = self.winfo_rooty() + max(0, (self.winfo_height() - fh) // 2)
+            wx, wy, ww, wh = self._work_area_phys()
+            x = max(wx, min(x, wx + ww - fw))
+            y = max(wy, min(y, wy + wh - fh))
+            w.geometry(f'{W}x{H}+{x}+{y}')
         except Exception:
             pass
 
@@ -2655,29 +2711,32 @@ class App(ctk.CTk):
         self._apply_icon(dlg)
         dlg.title('设置')
         dlg.geometry('460x560')   # 高度随后按内容自适应（auto-fit），此处仅给个保底
-        dlg.resizable(False, False)
         dlg.transient(self)
         dlg.grab_set()
-        dlg.after(10, lambda: self._center_on_main(dlg))
         dlg.attributes('-topmost', True)
-        ask = ctk.CTkCheckBox(dlg, text='保存预设时询问是否覆盖同名预设')
+        dlg.resizable(False, False)
+        # 内容在小屏 / 高 DPI / 高缩放环境下可能超过可用高度：统一放进可滚动容器，
+        # 超出部分用滚轮查看，避免底部控件（保存 / 检查更新）被裁到屏幕外。
+        body = ctk.CTkScrollableFrame(dlg, fg_color='transparent', corner_radius=0)
+        body.pack(fill='both', expand=True)
+        ask = ctk.CTkCheckBox(body, text='保存预设时询问是否覆盖同名预设')
         if self.cfg.get('overwrite_ask', True):
             ask.select()
         ask.pack(pady=(14, 6), padx=24, anchor='w')
-        sizebox = ctk.CTkCheckBox(dlg, text='记录窗口大小（下次启动恢复同样大小）')
+        sizebox = ctk.CTkCheckBox(body, text='记录窗口大小（下次启动恢复同样大小）')
         if self.cfg.get('remember_size', True):
             sizebox.select()
         sizebox.pack(pady=6, padx=24, anchor='w')
-        auto_upd = ctk.CTkCheckBox(dlg, text='启动时自动检查更新（GitHub Release）')
+        auto_upd = ctk.CTkCheckBox(body, text='启动时自动检查更新（GitHub Release）')
         if default_auto_check_updates(self.cfg):
             auto_upd.select()
         auto_upd.pack(pady=(0, 6), padx=24, anchor='w')
 
         # llama-server 路径（全局，不在预设里）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
-        ctk.CTkLabel(dlg, text='llama-server.exe 路径（全局，留空=程序同目录）',
+        ctk.CTkLabel(body, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
+        ctk.CTkLabel(body, text='llama-server.exe 路径（全局，留空=程序同目录）',
                      anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
-        spf = ctk.CTkFrame(dlg, fg_color='transparent')
+        spf = ctk.CTkFrame(body, fg_color='transparent')
         spf.pack(padx=24, pady=(0, 6), fill='x')
         sp_entry = ctk.CTkEntry(spf, height=38, placeholder_text='留空=程序同目录 llama-server.exe')
         sp_entry.pack(side='left', fill='x', expand=True)
@@ -2695,10 +2754,10 @@ class App(ctk.CTk):
         ctk.CTkButton(spf, height=38, text='浏览…', width=70, command=browse_sp).pack(side='left', padx=(6, 0))
 
         # 模型文件夹（全局，留空=程序同目录 models）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
-        ctk.CTkLabel(dlg, text='模型文件夹（全局，留空=程序同目录 models）',
+        ctk.CTkLabel(body, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
+        ctk.CTkLabel(body, text='模型文件夹（全局，留空=程序同目录 models）',
                      anchor='w').pack(padx=24, pady=(4, 2), anchor='w')
-        mdf = ctk.CTkFrame(dlg, fg_color='transparent')
+        mdf = ctk.CTkFrame(body, fg_color='transparent')
         mdf.pack(padx=24, pady=(0, 6), fill='x')
         md_entry = ctk.CTkEntry(mdf, height=38, placeholder_text='留空=程序同目录 models')
         md_entry.pack(side='left', fill='x', expand=True)
@@ -2715,7 +2774,7 @@ class App(ctk.CTk):
         ctk.CTkButton(mdf, height=38, text='浏览…', width=70, command=browse_md).pack(side='left', padx=(6, 0))
 
         # 默认端口（全局）：无预设自动计算时保留当前端口；未设端口时用它兜底
-        dpf = ctk.CTkFrame(dlg, fg_color='transparent')
+        dpf = ctk.CTkFrame(body, fg_color='transparent')
         dpf.pack(padx=24, pady=(8, 6), fill='x')
         ctk.CTkLabel(dpf, text='默认端口（全局）', width=130, anchor='w').pack(side='left')
         dp_entry = ctk.CTkEntry(dpf, height=38, placeholder_text='留空=8080')
@@ -2757,43 +2816,50 @@ class App(ctk.CTk):
         ctk.CTkButton(dpf, height=38, text='保存', width=90, command=save).pack(side='left', padx=(8, 0))
 
         # 预设健康检查（打开设置即自动检查缺失模型的预设）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
+        ctk.CTkLabel(body, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
         n_orphan = len(self.find_orphan_presets())
-        ctk.CTkLabel(dlg, text=f'预设健康检查：缺失模型的预设 {n_orphan} 个',
+        ctk.CTkLabel(body, text=f'预设健康检查：缺失模型的预设 {n_orphan} 个',
                      text_color='#e8b04a' if n_orphan else '#7fd9a0').pack(pady=(2, 4))
-        ctk.CTkButton(dlg, height=38, text='管理（保留 / 删除 / 导出有效 / 导出无效）', width=280,
+        ctk.CTkButton(body, height=38, text='管理（保留 / 删除 / 导出有效 / 导出无效）', width=280,
                       command=self.manage_orphan_presets).pack(pady=(0, 6))
-        btns = ctk.CTkFrame(dlg, fg_color='transparent')
+        btns = ctk.CTkFrame(body, fg_color='transparent')
         btns.pack(pady=(0, 8))
         ctk.CTkButton(btns, height=38, text='导入预设（合并）', width=132, command=self.import_presets).pack(side='left', padx=4)
         ctk.CTkButton(btns, height=38, text='批量管理预设', width=132, command=self.manage_presets_all).pack(side='left', padx=4)
 
         # 模型清单（弹出独立窗口）
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
-        ctk.CTkButton(dlg, height=38, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
+        ctk.CTkLabel(body, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
+        ctk.CTkButton(body, height=38, text='📦 模型清单', width=200, command=self.show_model_list).pack(pady=(0, 6))
 
-        ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
-        ctk.CTkLabel(dlg, text=f'LLM GUI · v{VERSION}', font=('Microsoft YaHei', 14, 'bold')).pack()
-        ctk.CTkLabel(dlg, text='llama-server 本地桌面启动器', text_color=UI['muted']).pack(pady=(2, 0))
-        ctk.CTkLabel(dlg, text=f'GitHub：{GITHUB_USER}', text_color=UI['muted']).pack(pady=(8, 0))
-        link = ctk.CTkLabel(dlg, text=GITHUB_URL, text_color='#7db4ff', cursor='hand2', font=('Consolas', 11))
+        ctk.CTkLabel(body, text='─' * 36, text_color='#556271').pack(pady=(6, 2))
+        ctk.CTkLabel(body, text=f'LLM GUI · v{VERSION}', font=('Microsoft YaHei', 14, 'bold')).pack()
+        ctk.CTkLabel(body, text='llama-server 本地桌面启动器', text_color=UI['muted']).pack(pady=(2, 0))
+        ctk.CTkLabel(body, text=f'GitHub：{GITHUB_USER}', text_color=UI['muted']).pack(pady=(8, 0))
+        link = ctk.CTkLabel(body, text=GITHUB_URL, text_color='#7db4ff', cursor='hand2', font=('Consolas', 11))
         link.pack(pady=(2, 0))
         link.bind('<Button-1>', lambda _: webbrowser.open(GITHUB_URL))
         # 手动「检查更新」：与启动自动检查共用 _start_update_check 核心逻辑；关于区保持不破坏主界面布局
-        upd_row = ctk.CTkFrame(dlg, fg_color='transparent')
-        upd_row.pack(pady=(8, 0))
+        upd_row = ctk.CTkFrame(body, fg_color='transparent')
+        upd_row.pack(pady=(8, 12))
         ctk.CTkButton(upd_row, height=38, text='检查更新', width=120,
                       command=self._check_update_manual).pack(side='left', padx=4)
         ctk.CTkButton(upd_row, height=38, text='前往发布页', width=120,
                       command=lambda: webbrowser.open(RELEASE_PAGE_URL)).pack(side='left', padx=4)
 
-        # 高度按内容自适应（逻辑高 = 物理 reqheight / 窗口缩放），消除仓库链接下方留白
+        # 高度自适应：内容放得下就贴合内容高度，放不下则顶到工作区上限并交给滚动条。
         try:
             dlg.update_idletasks()
-            h = int(dlg.winfo_reqheight() / dlg._get_window_scaling()) + 8
+            scale = dlg._get_window_scaling() or 1
+            content_h = int(body.winfo_reqheight() / scale) + 8
+            _, _, _, chrome_h = self._window_chrome(dlg)
+            _, _, _, wa_h = self._work_area_phys()          # 物理
+            usable = int((wa_h - chrome_h) / scale) - 16    # 逻辑：扣掉标题栏与少量边距
+            h = max(260, min(content_h, usable))
             dlg.geometry(f'460x{h}')
         except Exception:
             pass
+        # 尺寸确定后再定位：居中并夹进工作区（避免底部被裁到屏幕外）。
+        dlg.after(10, lambda: self._center_on_main(dlg))
 
     def show_model_list(self):
         """弹出模型清单窗口：models/ 下所有 .gguf（模型 + mmproj 投影文件）+ 大小 + 总占用"""

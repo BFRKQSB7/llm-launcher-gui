@@ -1,4 +1,4 @@
-# LLM GUI v1.12.0
+# LLM GUI v1.12.1
 
 **English** | [**简体中文**](./README.zh-CN.md)
 
@@ -89,6 +89,9 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.12.1 (2026-10-15): fix the Settings dialog overflowing and being placed off-screen.
+  - Fix: the Settings page is now scrollable and its height is capped to the usable screen height, so on high-DPI / large-scale displays (e.g. 2K at 150%) the bottom buttons ("Save" / "Check for updates") are no longer cut off below the screen edge
+  - Fix: dialogs are now positioned using consistent physical units (client area × scaling + window chrome) and clamped inside the work area, so they no longer open partly off-screen or need to be dragged up by hand
 - v1.12.0 (2026-10-15): in-app auto-update from GitHub Releases.
   - New: background update check ~1–2s after launch (silent on network/API/JSON failure, never blocks startup); a customtkinter dialog shows current/latest version and scrollable release notes, with "Update now" / "Go to release page" / "Later"; prompted at most once per run
   - New: one-click update for the frozen exe — download to a uniquely named temp file in the app folder, optional SHA-256 verification (aborts and deletes the file on mismatch, never overwrites), then a generated `.bat` waits for the old PID to exit, replaces `LLMGUI.exe` with limited retries, relaunches and self-deletes; only `LLMGUI.exe` is replaced — `llm_gui_data.json`, `models/`, `llama-server.exe`, presets and Jinja files are untouched; no admin rights required

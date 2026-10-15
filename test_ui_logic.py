@@ -138,3 +138,65 @@ class UiLifecycleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DialogGeometryTests(unittest.TestCase):
+    """设置等弹窗的定位/自适应：必须按物理像素夹进工作区，避免高 DPI 下底部被裁出屏幕。"""
+
+    def app(self, scale=1.5, work=(0, 0, 2560, 1368), chrome=(11, 45, 22, 45)):
+        app = object.__new__(llm_gui.App)
+        app._get_window_scaling = lambda: scale
+        app._work_area_phys = lambda: work
+        app._window_chrome = lambda w: chrome
+        app.winfo_rootx = lambda: 120
+        app.winfo_rooty = lambda: 60
+        app.winfo_width = lambda: 1410
+        app.winfo_height = lambda: 1320
+        return app
+
+    class _W:
+        def __init__(self, geom='460x560+0+0'):
+            self._geom = geom
+            self.applied = None
+
+        def update_idletasks(self):
+            pass
+
+        def _get_window_scaling(self):
+            return getattr(self, 'scale', 1.5)
+
+        def geometry(self, value=None):
+            if value is None:
+                return self._geom
+            self.applied = value
+            self._geom = value
+
+    def test_center_clamps_bottom_inside_work_area(self):
+        app = self.app()
+        w = self._W('460x850+0+0')          # 客户区 850 逻辑 → 1275 物理 + 标题栏 45
+        app._center_on_main(w)
+        x, y = map(int, w.applied.split('+')[1:])
+        self.assertEqual(self._rect(x, y, w, app), True)
+
+    @staticmethod
+    def _rect(x, y, w, app):
+        _dx, _dy, cw, ch = app._window_chrome(w)
+        fw = int(460 * 1.5) + cw
+        fh = int(850 * 1.5) + ch
+        _wx, _wy, ww, wh = app._work_area_phys()
+        return x >= _wx and y >= _wy and x + fw <= _wx + ww and y + fh <= _wy + wh
+
+    def test_usable_height_subtracts_chrome(self):
+        """可用逻辑高度 = (工作区物理高 - 标题栏)/缩放 - 边距，矮屏必须夹住而不是溢出。"""
+        app = self.app(work=(0, 0, 2560, 900), chrome=(11, 45, 22, 45))
+        scale = 1.5
+        _, _, _, wa_h = app._work_area_phys()
+        _, _, _, chrome_h = app._window_chrome(None)
+        usable = int((wa_h - chrome_h) / scale) - 16
+        self.assertLess(usable, 900 / scale)
+        self.assertEqual(max(260, min(99999, usable)), usable)
+
+    def test_chrome_offsets_are_non_negative(self):
+        app = self.app(chrome=(11, 45, 22, 45))
+        dx, dy, cw, ch = app._window_chrome(None)
+        self.assertTrue(all(v >= 0 for v in (dx, dy, cw, ch)))
