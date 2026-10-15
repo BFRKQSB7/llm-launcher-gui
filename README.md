@@ -1,4 +1,4 @@
-# LLM GUI v1.11.0
+# LLM GUI v1.12.0
 
 **English** | [**简体中文**](./README.zh-CN.md)
 
@@ -27,6 +27,8 @@ A local desktop launcher for Windows that manages `llama-server` with a GUI — 
 - Single-file configuration: settings, presets, and auto-computed defaults all live in `llm_gui_data.json`; the first launch automatically consolidates and removes the three legacy config files
 - GPU dropdown (auto-detected via `nvidia-smi`); listen on localhost / LAN; KV cache precision options
 - Live logs + persistent display of model name and API endpoints (e.g. `/v1/chat/completions`)
+- Auto-update from GitHub Releases: checks for a new version in the background shortly after launch (silent on failure, never blocks startup), shows a styled dialog with the release notes, and can download + verify (SHA-256) + replace the running exe and restart it in place — only `LLMGUI.exe` is touched, your data/models/presets are never modified
+- Manual "check for updates" and a "check on launch" toggle in Settings (stored in `llm_gui_data.json`, back-compatible; on by default)
 - Single-file exe, no Python installation needed
 
 ## Screenshot
@@ -87,6 +89,11 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.12.0 (2026-10-15): in-app auto-update from GitHub Releases.
+  - New: background update check ~1–2s after launch (silent on network/API/JSON failure, never blocks startup); a customtkinter dialog shows current/latest version and scrollable release notes, with "Update now" / "Go to release page" / "Later"; prompted at most once per run
+  - New: one-click update for the frozen exe — download to a uniquely named temp file in the app folder, optional SHA-256 verification (aborts and deletes the file on mismatch, never overwrites), then a generated `.bat` waits for the old PID to exit, replaces `LLMGUI.exe` with limited retries, relaunches and self-deletes; only `LLMGUI.exe` is replaced — `llm_gui_data.json`, `models/`, `llama-server.exe`, presets and Jinja files are untouched; no admin rights required
+  - New: manual "check for updates" plus a "check on launch" toggle in Settings (default on; old config without the field stays on)
+  - Fix: updating safely stops the launcher-managed `llama-server` first (reuses the existing stop logic) without killing unrelated processes; source mode (`python llm_gui.py`) never replaces the running program — it just opens the release page
 - v1.11.0 (2026-10-06): grouped parameter tabs, consistent dark styling and Chinese fonts, process-aware controls, asynchronous stop, stale-process event protection, Copy API, keyboard shortcuts, input error focus, preset deletion confirmation, and preservation of manual edits and log reading position.
 
   - New: `top-k`, `--ubatch-size`, and `--cache-reuse` parameters, each saved in presets and left blank to keep llama.cpp defaults

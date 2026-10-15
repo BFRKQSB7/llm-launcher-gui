@@ -51,6 +51,13 @@ class ConfigDataTests(unittest.TestCase):
         self.assertIn('model.gguf', data['presets'])
         self.assertEqual(data['defaults']['model.gguf']['ctx'], 16384)
 
+    def test_auto_check_updates_round_trips_in_config(self):
+        llm_gui.save_cfg({'auto_check_updates': False})
+        self.assertFalse(llm_gui.load_cfg()['auto_check_updates'])
+        self.assertFalse(llm_gui.default_auto_check_updates(llm_gui.load_cfg()))
+        llm_gui.save_cfg({'server_path': 'x'})   # 旧配置无该字段
+        self.assertTrue(llm_gui.default_auto_check_updates(llm_gui.load_cfg()))
+
     def test_concurrent_section_saves_do_not_overwrite_each_other(self):
         writers = (
             lambda i: llm_gui.save_cfg({'revision': i}),

@@ -58,8 +58,13 @@
 #   - 后台线程：_poll_q 队列分发（hardware/models/log/exited/stop_error 等；每轮有上限）→ 检索「def _poll_q」
 #   - 日志/服务信息：append_log / clear_log / update_svc_info / _set_svc_idle / _svc_*
 #   - 弹窗：open_settings / confirm_overwrite / _import_conflict_dialog / manage_* 等
+#   - 自动更新：纯函数（normalize/compare/parse_release/find_asset/verify_sha256/build_update_bat）
+#     在模块顶部；App 侧 _start_update_check→_handle_update_result→_show_update_dialog→
+#     _start_update_download→_on_update_downloaded→_apply_pending_update_and_exit
+#     → 检索「def _start_update_check」「def build_update_bat」
 # ================================================================================
-import json, os, queue, re, socket, struct, subprocess, sys, threading, traceback, webbrowser
+import codecs, hashlib, json, os, queue, re, socket, struct, subprocess, sys, tempfile, threading, traceback, webbrowser
+import urllib.error, urllib.request
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox, filedialog
@@ -124,9 +129,16 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.11.0'
+VERSION = '1.12.0'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
+UPDATE_API_URL = f'https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest'
+RELEASE_PAGE_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}/releases/latest'
+UPDATE_ASSET_NAME = 'LLMGUI.exe'
+UPDATE_USER_AGENT = f'LLMGUI-Updater/{VERSION}'
+UPDATE_API_TIMEOUT = 6      # 版本检查快速失败，不能拖住启动
+UPDATE_API_RETRY = 3        # 下载：有限次数短间隔重试（配合断点续传）
+UPDATE_RETRY_DELAY = 1.0
 GITHUB_URL = f'https://github.com/{GITHUB_USER}/{GITHUB_REPO}'
 _SRC_MAX = 42   # 来源标识独占一行，长名称仍截断并保留完整悬浮提示
 GPU_BOX_PAD = 58   # 显卡下拉箭头区 + 左右内边距（逻辑 px）；裁剪文本可用宽度 = 盒子宽 - 此值
@@ -291,6 +303,300 @@ def save_cfg(c):
     _save_section('config', c)
 
 
+# ==================== 自动更新（检查 / 下载 / 校验 / 辅助替换） ====================
+# 拆分原则：纯函数（版本比较、asset 查找、digest 解析、文件校验、脚本生成）不碰 Tk，
+# 便于单元测试；网络与子进程替换集中在少量函数里。所有网络/磁盘工作都在后台线程执行，
+# 结果只通过 self._q 回主线程，禁止工作线程直接操作 tkinter 控件。
+
+def normalize_version(tag):
+    """把 GitHub tag 规范化为可比较版本串：v1.12.0 → 1.12.0，去空白与首尾 v/V。"""
+    return re.sub(r'^[vV]\s*', '', str(tag or '').strip())
+
+
+def _parse_version_tuple(text):
+    """数字版本比较用；无法解析返回 None。'1.10.10' → (1, 10, 10)。"""
+    m = re.match(r'^(\d+(?:\.\d+)*)', normalize_version(text))
+    if not m:
+        return None
+    return tuple(int(x) for x in m.group(1).split('.'))
+
+
+def compare_versions(a, b):
+    """返回 (是否 a>b, 是否 a<b)。数字逐段比较，缺失段按 0；1.10.10 > 1.10.2。
+
+    任一侧无法解析时视为无法比较（都返回 False），避免把垃圾 tag 当成新版本。
+    """
+    ta, tb = _parse_version_tuple(a), _parse_version_tuple(b)
+    if ta is None or tb is None:
+        return False, False
+    n = max(len(ta), len(tb))
+    va = ta + (0,) * (n - len(ta))
+    vb = tb + (0,) * (n - len(tb))
+    return va > vb, va < vb
+
+
+def parse_sha256_digest(digest):
+    """解析 asset 的 digest 字段。返回小写十六进制串或 None。"""
+    if not digest or not isinstance(digest, str):
+        return None
+    text = digest.strip().lower()
+    if text.startswith('sha256:'):
+        text = text[len('sha256:'):].strip()
+    if re.fullmatch(r'[0-9a-f]{64}', text):
+        return text
+    return None
+
+
+def find_asset(assets, name=UPDATE_ASSET_NAME):
+    """从 release assets 中找指定文件名（大小写不敏感），无则返回 None。"""
+    for a in assets or []:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get('name') or '').strip().lower() == name.lower():
+            return a
+    return None
+
+
+def sha256_file(path, chunk_size=1 << 20):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for blk in iter(lambda: f.read(chunk_size), b''):
+            h.update(blk)
+    return h.hexdigest()
+
+
+def verify_sha256(path, digest):
+    """返回 (是否校验通过, 计算值)。digest 为空(无校验值)时视为通过。"""
+    actual = sha256_file(path)
+    want = parse_sha256_digest(digest)
+    if want is None:
+        return True, actual
+    return actual == want, actual
+
+
+def default_auto_check_updates(cfg):
+    """旧用户无该字段时默认开；显式关闭才不自动检查。"""
+    return bool(cfg.get('auto_check_updates', True))
+
+
+def parse_release(api_json):
+    """把 releases/latest 响应转成更新信息 dict；非可用正式版返回 None。
+
+    过滤 draft / prerelease；规范化 tag；找不到 LLMGUI.exe asset 时仍返回信息
+    （只用于提示），是否可一键更新由 asset 是否为 None 决定。
+    """
+    if not isinstance(api_json, dict):
+        return None
+    if api_json.get('draft') or api_json.get('prerelease'):
+        return None
+    tag = str(api_json.get('tag_name') or '').strip()
+    if not tag:
+        return None
+    asset = find_asset(api_json.get('assets'))
+    info = {
+        'tag': tag,
+        'version': normalize_version(tag),
+        'name': api_json.get('name') or '',
+        'body': api_json.get('body') or '',
+        'html_url': api_json.get('html_url') or RELEASE_PAGE_URL,
+        'asset_name': None,
+        'asset_url': None,
+        'digest': None,
+        'size': None,
+    }
+    if asset:
+        info['asset_name'] = asset.get('name')
+        info['asset_url'] = asset.get('browser_download_url')
+        info['digest'] = parse_sha256_digest(asset.get('digest'))
+        info['size'] = asset.get('size')
+    return info
+
+
+def is_update_available(local_version, remote_version):
+    """远端严格大于本地才提示。"""
+    newer, _older = compare_versions(remote_version, local_version)
+    return newer
+
+
+def _console_encoding():
+    """Windows 控制台/批处理默认代码页（中文 GBK=936）；非 Windows 退 UTF-8。"""
+    if os.name == 'nt':
+        return codecs.lookup('mbcs').name   # open()/str.encode 只接受编码名字符串
+    return 'utf-8'
+
+
+def quote_cmd_arg(arg):
+    """给 Windows 命令行参数加引号，路径含空格/中文/特殊目录也能正确传递。"""
+    s = str(arg).replace('"', '""')
+    return '"' + s + '"'
+
+
+def build_update_bat(new_exe, target_exe, pid, bat_path=None, relaunch=True, log_path=None):
+    """生成替换辅助 .bat 的内容（不落盘，便于测试）。
+
+    - 等待旧进程（按 PID）退出；tasklist/powershell 双探针，最多约 30 秒，绝不无限循环
+    - 覆盖失败时短间隔重试（应对 Defender/杀软短暂占用），有限次数
+    - 覆盖成功后删除已失效的临时新版，再启动新版，最后自删除
+    """
+    target_exe = os.path.abspath(target_exe)
+    new_exe = os.path.abspath(new_exe)
+    target_dir = os.path.dirname(target_exe)
+    if bat_path is None or log_path is None:
+        stem = os.path.basename(bat_path or 'llmgui-update.bat')
+        stem = os.path.splitext(stem)[0]
+        tmpdir = os.path.dirname(new_exe)
+        bat_path = bat_path or os.path.join(tmpdir, stem + '.bat')
+        log_path = log_path or os.path.join(tmpdir, stem + '.log')
+    lines = [
+        '@echo off',
+        'setlocal enableextensions',
+        'rem LLM GUI 自动更新辅助脚本 —— 由程序生成，退出后替换 EXE 并重启新版',
+        f'set "TARGET={target_exe}"',
+        f'set "NEWEXE={new_exe}"',
+        f'set "PID={int(pid)}"',
+        f'set "WAITLOOP=0"',
+        ':waitloop',
+        f'set /a WAITLOOP+=1',
+        f'if %WAITLOOP% GTR 30 goto killcheck_done',
+        'tasklist /FI "PID eq %PID%" /NH 2>nul | find "%PID%" >nul',
+        'if errorlevel 1 goto job_start',
+        'powershell -NoProfile -ExecutionPolicy Bypass -Command '
+        '"if (Get-Process -Id %PID% -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }" >nul 2>nul',
+        'if errorlevel 1 (',
+        '  ping -n 2 127.0.0.1 >nul',
+        '  goto waitloop',
+        ')',
+        ':killcheck_done',
+        ':job_start',
+        'rem 文件可能被系统短暂占用，做有限次数短间隔重试',
+        'set "TRY=0"',
+        ':copyloop',
+        f'set /a TRY+=1',
+        f'copy /y "%NEWEXE%" "%TARGET%" >> "{log_path}" 2>&1',
+        'if not errorlevel 1 goto launched',
+        'if %TRY% GEQ 15 goto giveup',
+        'ping -n 2 127.0.0.1 >nul',
+        'goto copyloop',
+        ':launched',
+        'del /f /q "%NEWEXE%" >> "' + log_path + '" 2>&1',
+    ]
+    if relaunch:
+        self_dir = os.path.dirname(bat_path)
+        lines += [
+            f'cd /d "{self_dir}"',
+            f'start "" "%TARGET%"',
+        ]
+    lines += [
+        ':giveup',
+        'rem 自删除：cmd 退出后由 powershell 删除本脚本与日志',
+        f'start "" /b powershell -NoProfile -ExecutionPolicy Bypass -Command '
+        f'"Start-Sleep -Milliseconds 600; Remove-Item -Force -LiteralPath {quote_cmd_arg(bat_path)},'
+        f'{quote_cmd_arg(log_path)} -ErrorAction SilentlyContinue" >nul 2>&1',
+        'endlocal',
+    ]
+    return '\r\n'.join(lines) + '\r\n'
+
+
+def write_update_bat(bat_path, content):
+    """以系统控制台代码页写入 .bat，保证含中文路径时 cmd 能正确解析。"""
+    with open(bat_path, 'w', encoding=_console_encoding(), errors='replace', newline='') as f:
+        f.write(content)
+
+
+def spawn_detached(argv):
+    """无窗口、脱离父进程地启动辅助脚本/命令，避免随 Launcher 退出被回收。"""
+    flags = 0
+    if os.name == 'nt':
+        flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'DETACHED_PROCESS', 0)
+    return subprocess.Popen(argv, close_fds=True, creationflags=flags)
+
+
+def _short_error(exc):
+    """把网络/HTTP 异常压成一句可读中文，供弹窗与日志使用。"""
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code == 404:
+            return '更新源返回 404（尚未发布正式 Release）'
+        if code == 403:
+            return '更新源拒绝访问（可能是 API 限流，请稍后重试）'
+        if 500 <= code < 600:
+            return f'更新服务器错误（HTTP {code}）'
+        return f'更新请求失败（HTTP {code}）'
+    if isinstance(exc, urllib.error.URLError):
+        return '网络不可用或无法连接更新源'
+    if isinstance(exc, TimeoutError):
+        return '更新检查超时'
+    return str(exc) or exc.__class__.__name__
+
+
+def _http_get_json(url, timeout=UPDATE_API_TIMEOUT):
+    """请求 GitHub API 并解析 JSON；任何失败都抛异常由调用方处理。"""
+    req = urllib.request.Request(url, headers={
+        'User-Agent': UPDATE_USER_AGENT,
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode('utf-8', 'replace'))
+
+
+def fetch_latest_release(timeout=UPDATE_API_TIMEOUT):
+    """获取最新正式 Release 信息（已过滤 draft/prerelease），无可用版本返回 None。"""
+    return parse_release(_http_get_json(UPDATE_API_URL, timeout=timeout))
+
+
+def download_asset(url, dest, expected_size=None, on_progress=None, on_phase=None):
+    """下载 asset 到 dest（临时文件）。返回下载字节数。支持断点续传与有限重试。
+
+    只使用标准库；Content-Length 可得时按百分比回调 on_progress(done, total)。
+    校验不在此函数内做，交由调用方 verify_sha256。
+    """
+    total = int(expected_size) if expected_size else None
+    last_err = None
+    done = 0
+    for attempt in range(UPDATE_API_RETRY):
+        try:
+            resume_from = os.path.getsize(dest) if (attempt > 0 and os.path.exists(dest)) else 0
+            if attempt > 0 and resume_from == 0:
+                try:
+                    os.remove(dest)
+                except OSError:
+                    pass
+            headers = {'User-Agent': UPDATE_USER_AGENT}
+            if resume_from:
+                headers['Range'] = f'bytes={resume_from}-'
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=max(UPDATE_API_TIMEOUT, 30)) as resp:
+                if total is None:
+                    cl = resp.headers.get('Content-Length')
+                    if cl and cl.isdigit():
+                        total = (resume_from + int(cl)) if resume_from else int(cl)
+                mode = 'ab' if resume_from else 'wb'
+                done = resume_from
+                with open(dest, mode) as f:
+                    if on_phase:
+                        on_phase('downloading')
+                    while True:
+                        chunk = resp.read(1 << 16)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        done += len(chunk)
+                        if on_progress:
+                            on_progress(done, total)
+            return done
+        except Exception as e:   # 网络中断 / HTTP 错误 / 磁盘错误，统一有限重试
+            last_err = e
+            if attempt >= UPDATE_API_RETRY - 1:
+                break
+            import time as _time
+            _time.sleep(UPDATE_RETRY_DELAY)
+    raise last_err if last_err else RuntimeError('下载失败')
+
+# ================================================================================
+
+
 # mmproj 文件名里的量化/精度后缀 token，不参与身份匹配（否则短数字会误匹配进 f16/q8_0 等）
 _MMPROJ_NOISE = {'f16', 'f32', 'bf16', 'fp16', 'gguf', 'i8',
                  'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'q6_k', 'q5_k', 'q4_k', 'q3_k', 'q2_k'}
@@ -378,6 +684,7 @@ def detect_vram_gb():
     except Exception:
         pass
     return 0
+
 
 
 # ---------- GGUF 元数据解析（保留的只读工具；自动计算已改用 llama.cpp --fit） ----------
@@ -529,6 +836,272 @@ class ParameterError(ValueError):
 
 
 class App(ctk.CTk):
+    # ---------- 自动更新（后台网络/替换 + 主线程 UI 调度） ----------
+    def _start_update_check(self, manual=False):
+        """启动后台更新检查；结果经队列回主线程。manual=用户手动触发（失败会提示）。"""
+        threading.Thread(target=self._update_check_work, args=(manual,), daemon=True).start()
+
+    def _update_check_work(self, manual):
+        try:
+            info = fetch_latest_release()
+            self._q.put(('update_result', info, None, manual, True))
+        except Exception as e:
+            self._q.put(('update_result', None, _short_error(e), manual, False))
+
+    def _handle_update_result(self, info, err, manual, ok):
+        """主线程：处理检查结果。自动检查失败静默；手动检查明确反馈。"""
+        if not ok:
+            if manual:
+                self._show_info('检查更新', err or '网络异常，未能检查更新')
+            return
+        if not info or not info.get('version'):
+            if manual:
+                self._show_info('检查更新', '更新源暂无正式版本信息')
+            return
+        if not is_update_available(VERSION, info['version']):
+            if manual:
+                self._show_info('检查更新', f'当前已是最新版本 v{VERSION}')
+            return
+        if not manual and self._update_prompted:
+            return
+        self._update_prompted = True
+        self._show_update_dialog(info)
+
+    def _show_update_dialog(self, info):
+        old = getattr(self, '_update_dlg', None)
+        if old is not None and old.winfo_exists():
+            old.lift(); old.focus_force(); return
+        dlg = ctk.CTkToplevel(self)
+        self._update_dlg = dlg
+        self._apply_icon(dlg)
+        dlg.title(f'发现新版本 v{info["version"]}')
+        dlg.geometry('540x460')
+        dlg.minsize(440, 320)
+        dlg.resizable(True, True)
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.after(10, lambda: self._center_on_main(dlg))
+        dlg.attributes('-topmost', True)
+        ctk.CTkLabel(dlg, text=f'发现新版本 v{info["version"]}',
+                     font=('Microsoft YaHei', 18, 'bold')).pack(pady=(16, 4))
+        ctk.CTkLabel(dlg, text=f'当前版本：v{VERSION}    最新版本：v{info["version"]}',
+                     text_color=UI['muted']).pack(pady=(0, 8))
+        ctk.CTkLabel(dlg, text='更新说明：', anchor='w').pack(fill='x', padx=18)
+        box = ctk.CTkTextbox(dlg, height=180, wrap='word', font=('Microsoft YaHei', 13))
+        box.pack(fill='both', expand=True, padx=18, pady=(2, 6))
+        box.insert('1.0', info.get('body') or '（本次发布未提供更新说明）')
+        box.configure(state='disabled')
+        can_update = bool(info.get('asset_url'))
+        if not can_update:
+            ctk.CTkLabel(dlg, text='本次 Release 未提供 LLMGUI.exe，仅能前往发布页下载。',
+                         text_color=UI['warning'], anchor='w').pack(fill='x', padx=18)
+        prog = ctk.CTkProgressBar(dlg, mode='determinate')
+        prog.set(0)
+        prog.pack(fill='x', padx=18, pady=(2, 2))
+        status = ctk.CTkLabel(dlg, text='', anchor='w', text_color=UI['muted'], height=22)
+        status.pack(fill='x', padx=18, pady=(0, 6))
+        btns = ctk.CTkFrame(dlg, fg_color='transparent')
+        btns.pack(pady=(0, 4))
+        update_btn = ctk.CTkButton(btns, height=38, text='立即更新', width=110,
+                                   fg_color=BUTTON_COLORS['blue'][0], hover_color=BUTTON_COLORS['blue'][1])
+        page_btn = ctk.CTkButton(btns, height=38, text='前往发布页', width=110,
+                                 command=lambda: webbrowser.open(info.get('html_url') or RELEASE_PAGE_URL))
+        later_btn = ctk.CTkButton(btns, height=38, text='稍后', width=90, command=dlg.destroy)
+        update_btn.pack(side='left', padx=6)
+        page_btn.pack(side='left', padx=6)
+        later_btn.pack(side='left', padx=6)
+        ctk.CTkLabel(dlg, text='本次运行最多提示一次；可在「设置」手动检查或关闭自动检查。',
+                     text_color=UI['muted'], font=('Microsoft YaHei', 11)).pack(pady=(0, 10))
+        state = {'run': False}
+        self._update_ui = {'btn': update_btn, 'later': later_btn, 'status': status, 'prog': prog}
+
+        def on_update():
+            if state['run']:
+                return
+            if not can_update:
+                webbrowser.open(info.get('html_url') or RELEASE_PAGE_URL)
+                return
+            if not getattr(sys, 'frozen', False):
+                self._show_info('源码运行模式',
+                                '源码运行模式不支持直接覆盖更新，请前往 Release 下载正式版本。\n'
+                                f'远端版本：v{info["version"]}（当前 v{VERSION}）')
+                webbrowser.open(info.get('html_url') or RELEASE_PAGE_URL)
+                return
+            self._confirm_replace(info, state)
+
+        update_btn.configure(command=on_update)
+
+    def _confirm_replace(self, info, state):
+        """覆盖前二次确认（置顶单例）；确认后启动后台下载。"""
+        if not getattr(sys, 'frozen', False):
+            return
+        target = self._update_target_path()
+        base_dir = os.path.dirname(target)
+        if not base_dir or not os.path.isdir(base_dir) or not os.access(base_dir, os.W_OK):
+            self._show_info('无法自动更新',
+                            '程序所在目录不可写：\n' + base_dir +
+                            '\n请将程序移到有写入权限的目录，或前往发布页手动下载。')
+            webbrowser.open(info.get('html_url') or RELEASE_PAGE_URL)
+            return
+
+        def go():
+            state['run'] = True
+            state['btn'].configure(state='disabled')
+            state['later'].configure(state='disabled')
+            self._start_update_download(info, state, target, base_dir)
+        self._confirm_dlg('确认更新',
+                          f'将下载并替换当前程序为 v{info["version"]}，'
+                          '期间会停止正在运行的服务并重启程序。是否继续？',
+                          go, parent=self._update_dlg, yes_text='开始更新')
+
+    def _start_update_download(self, info, state, target, base_dir):
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix='LLMGUI-update-', suffix='.exe.tmp', dir=base_dir)
+            os.close(fd)
+            os.remove(tmp_path)   # 仅用于获得唯一名称，下载时重新创建
+        except OSError as e:
+            self._update_failed(state, f'无法创建临时文件：{e}')
+            return
+        try:
+            state['status'].configure(text='正在下载更新…', text_color=UI['muted'])
+            state['prog'].set(0)
+        except Exception:
+            pass
+
+        def work():
+            try:
+                download_asset(info['asset_url'], tmp_path, expected_size=info.get('size'),
+                               on_progress=lambda d, t: self._q.put(('update_progress', d, t)))
+                self._q.put(('update_phase', 'verifying', None))
+                ok, _actual = verify_sha256(tmp_path, info.get('digest'))
+                if not ok:
+                    raise ValueError('更新文件校验失败（SHA-256 不匹配）')
+                self._q.put(('update_downloaded', dict(info), tmp_path, target))
+            except Exception as e:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                self._q.put(('update_error', _short_error(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _update_target_path(self):
+        if getattr(sys, 'frozen', False):
+            return os.path.abspath(sys.executable)
+        return os.path.abspath(os.path.join(BASE, 'LLMGUI.exe'))
+
+    def _update_failed(self, state, message):
+        self.append_log('!!! 更新失败：' + message)
+        btn = (state or {}).get('btn')
+        st = (state or {}).get('status')
+        try:
+            if st is not None and st.winfo_exists():
+                st.configure(text='更新失败：' + message, text_color=UI['danger'])
+            if btn is not None and btn.winfo_exists():
+                btn.configure(state='normal', text='重试')
+                later = (state or {}).get('later')
+                if later is not None and later.winfo_exists():
+                    later.configure(state='normal')
+        except Exception:
+            pass
+        if isinstance(state, dict):
+            state['run'] = False
+
+    def _poll_update_progress(self, done, total):
+        ui = getattr(self, '_update_ui', None)
+        if not ui:
+            return
+        try:
+            if total and total > 0:
+                frac = min(1.0, done / total)
+                ui['prog'].set(frac)
+                ui['status'].configure(text=f'正在下载更新… {int(frac * 100)}%')
+            else:
+                ui['prog'].set(0)
+                ui['status'].configure(text=f'正在下载更新… {done // 1024} KB')
+        except Exception:
+            pass
+
+    def _on_update_downloaded(self, info, tmp_path, target):
+        try:
+            self._write_and_launch_updater(tmp_path, target)
+        except Exception as e:
+            self._update_failed(getattr(self, '_update_ui', {}), f'创建更新辅助脚本失败：{e}')
+            return
+        ui = getattr(self, '_update_ui', None)
+        try:
+            if ui:
+                ui['status'].configure(text='更新已下载，程序即将重启…', text_color=UI['success'])
+        except Exception:
+            pass
+        self._apply_pending_update_and_exit()
+
+    def _write_and_launch_updater(self, tmp_path, target):
+        bat_dir = os.path.dirname(target) or BASE
+        try:
+            fd, bat_path = tempfile.mkstemp(prefix='LLMGUI-update-', suffix='.bat', dir=bat_dir)
+            os.close(fd)
+        except OSError:
+            bat_path = os.path.join(tempfile.gettempdir(), f'LLMGUI-update-{os.getpid()}-{id(tmp_path):x}.bat')
+        log_path = (bat_path[:-4] + '.log') if bat_path.lower().endswith('.bat') else (bat_path + '.log')
+        content = build_update_bat(tmp_path, target, os.getpid(), bat_path=bat_path, log_path=log_path)
+        write_update_bat(bat_path, content)
+        spawn_detached(['cmd', '/c', bat_path])
+
+    def _apply_pending_update_and_exit(self):
+        """下载校验完成后的收尾：先安全停止由本程序启动的服务，再让辅助脚本替换并重启。"""
+        if self._closing:
+            return
+        if self.proc and self.proc.poll() is None:
+            self.append_log('>>> 正在停止服务以完成更新…')
+            self._closing = True
+            self._update_pending = True
+            self._set_service_state('stopping')
+            threading.Thread(target=self._terminate_process, args=(self.proc,), daemon=True).start()
+            self.after(4000, self._force_apply_pending)
+        else:
+            self._finish_close()
+
+    def _force_apply_pending(self):
+        if self._closed:
+            return
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        self._finish_close()
+
+    def _maybe_auto_check_update(self, delay_ms=1800):
+        if not default_auto_check_updates(self.cfg):
+            return
+        self.after(delay_ms, lambda: self._start_update_check(manual=False))
+
+    def _check_update_manual(self):
+        self._start_update_check(manual=True)
+
+    def _show_info(self, title, message):
+        """应用风格的信息弹窗，替代系统原生 messagebox（保持一致视觉与置顶行为）。"""
+        dlg = ctk.CTkToplevel(self)
+        self._apply_icon(dlg)
+        dlg.title(title)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.attributes('-topmost', True)
+        ctk.CTkLabel(dlg, text=message, font=('Microsoft YaHei', 14), wraplength=420,
+                     justify='left').pack(pady=(22, 10), padx=22)
+        ctk.CTkButton(dlg, height=38, text='知道了', width=100,
+                      command=dlg.destroy).pack(pady=(0, 18))
+        try:
+            dlg.update_idletasks()
+            w = max(320, int(dlg.winfo_reqwidth() / dlg._get_window_scaling()))
+            h = int(dlg.winfo_reqheight() / dlg._get_window_scaling()) + 8
+            dlg.geometry(f'{w}x{h}')
+        except Exception:
+            pass
+        dlg.after(10, lambda: self._center_on_main(dlg))
+        dlg.grab_set()
+
     def __init__(self):
         super().__init__()
         ctk.set_appearance_mode('dark')
@@ -558,6 +1131,10 @@ class App(ctk.CTk):
         self._closed = False
         self._service_state = 'idle'
         self._hardware_busy = False
+        # 自动更新状态：_update_prompted 保证同一次运行最多自动提示一次；
+        # _update_pending 标记「本次关闭是为了让辅助脚本替换 EXE」。
+        self._update_prompted = False
+        self._update_pending = False
         self._api_base = ''
         self.current_model = None
         self.presets = load_presets()
@@ -600,7 +1177,9 @@ class App(ctk.CTk):
         else:
             self.after(100, self._restore_default_sash)
         self.after(100, self.on_model_change)
-        self.after(200, self._startup_hardware)
+        self.after(250, self._check_server)
+        self.after(150, self._poll_q)
+        self._maybe_auto_check_update()
         self.after(250, self._check_server)
         self.after(150, self._poll_q)
 
@@ -1260,6 +1839,28 @@ class App(ctk.CTk):
                         self.append_log('!!! 停止失败: ' + error)
                         self._closing = False
                         self._set_service_state('running')
+                elif kind == 'update_result':
+                    _, info, err, manual, ok = item
+                    self._handle_update_result(info, err, manual, ok)
+                elif kind == 'update_progress':
+                    _, done, total = item
+                    self._poll_update_progress(done, total)
+                elif kind == 'update_phase':
+                    _, phase, _extra = item
+                    if phase == 'verifying':
+                        ui = getattr(self, '_update_ui', None)
+                        if ui:
+                            try:
+                                ui['status'].configure(text='下载完成，正在校验文件…')
+                                ui['prog'].set(1)
+                            except Exception:
+                                pass
+                elif kind == 'update_downloaded':
+                    _, info, tmp_path, target = item
+                    self._on_update_downloaded(info, tmp_path, target)
+                elif kind == 'update_error':
+                    _, msg = item
+                    self._update_failed(getattr(self, '_update_ui', {}), msg)
             except Exception as e:
                 if self._closed:
                     return
@@ -2047,6 +2648,10 @@ class App(ctk.CTk):
         if self.cfg.get('remember_size', True):
             sizebox.select()
         sizebox.pack(pady=6, padx=24, anchor='w')
+        auto_upd = ctk.CTkCheckBox(dlg, text='启动时自动检查更新（GitHub Release）')
+        if default_auto_check_updates(self.cfg):
+            auto_upd.select()
+        auto_upd.pack(pady=(0, 6), padx=24, anchor='w')
 
         # llama-server 路径（全局，不在预设里）
         ctk.CTkLabel(dlg, text='─' * 36, text_color='#556271').pack(pady=(8, 2))
@@ -2113,6 +2718,7 @@ class App(ctk.CTk):
             else:
                 self.cfg.pop('default_port', None)
             self.cfg['overwrite_ask'] = bool(ask.get())
+            self.cfg['auto_check_updates'] = bool(auto_upd.get())
             self.cfg['remember_size'] = bool(sizebox.get())
             self.cfg['server_path'] = sp_entry.get().strip()
             self.cfg['models_dir'] = md
@@ -2153,6 +2759,13 @@ class App(ctk.CTk):
         link = ctk.CTkLabel(dlg, text=GITHUB_URL, text_color='#7db4ff', cursor='hand2', font=('Consolas', 11))
         link.pack(pady=(2, 0))
         link.bind('<Button-1>', lambda _: webbrowser.open(GITHUB_URL))
+        # 手动「检查更新」：与启动自动检查共用 _start_update_check 核心逻辑；关于区保持不破坏主界面布局
+        upd_row = ctk.CTkFrame(dlg, fg_color='transparent')
+        upd_row.pack(pady=(8, 0))
+        ctk.CTkButton(upd_row, height=38, text='检查更新', width=120,
+                      command=self._check_update_manual).pack(side='left', padx=4)
+        ctk.CTkButton(upd_row, height=38, text='前往发布页', width=120,
+                      command=lambda: webbrowser.open(RELEASE_PAGE_URL)).pack(side='left', padx=4)
 
         # 高度按内容自适应（逻辑高 = 物理 reqheight / 窗口缩放），消除仓库链接下方留白
         try:
