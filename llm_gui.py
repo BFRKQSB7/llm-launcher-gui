@@ -458,7 +458,9 @@ def build_update_bat(new_exe, target_exe, pid, bat_path=None, relaunch=True, log
         ':waitloop',
         f'set /a WAITLOOP+=1',
         f'if %WAITLOOP% GTR 30 goto killcheck_done',
-        'tasklist /FI "PID eq %PID%" /NH 2>nul | find "%PID%" >nul',
+        # 用 %SystemRoot% 下的 findstr 全路径：PATH 里 Git 版 find.exe 会抢占裸 find，
+        # 导致把 PID 当文件名、errorlevel=1 误判“进程已退出”，从而跳过等待循环。
+        'tasklist /FI "PID eq %PID%" /NH 2>nul | "%SystemRoot%\\System32\\findstr.exe" /c:"%PID%" >nul',
         'if errorlevel 1 goto job_start',
         'powershell -NoProfile -ExecutionPolicy Bypass -Command '
         '"if (Get-Process -Id %PID% -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }" >nul 2>nul',
@@ -504,11 +506,29 @@ def write_update_bat(bat_path, content):
 
 
 def spawn_detached(argv):
-    """无窗口、脱离父进程地启动辅助脚本/命令，避免随 Launcher 退出被回收。"""
-    flags = 0
-    if os.name == 'nt':
-        flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'DETACHED_PROCESS', 0)
-    return subprocess.Popen(argv, close_fds=True, creationflags=flags)
+    """无窗口地启动辅助脚本/命令，避免随启动器退出被回收。
+
+    重要：这里**不能**用 DETACHED_PROCESS。实测它会让 cmd.exe 拿不到控制台，
+    `cmd /c xxx.bat` 直接静默退出（一行都不执行），导致“点了立即更新没反应”。
+    CREATE_NO_WINDOW 已经能隐藏窗口；CREATE_NEW_PROCESS_GROUP 用于减少被
+    父进程控制台事件（如 Ctrl+C）牵连的概率。CREATE_BREAKAWAY_FROM_JOB 仅在
+    进程处于 Job 中且已放行时可用，故失败时回退，不让更新流程中断。
+    """
+    if os.name != 'nt':
+        return subprocess.Popen(argv, close_fds=True,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    base = getattr(subprocess, 'CREATE_NO_WINDOW', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+    breakaway = getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0)
+    try:
+        return subprocess.Popen(argv, close_fds=True, creationflags=base | breakaway,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        # 当前进程不在 Job 中（或 Job 不允许 breakaway）时，WinError 5 会被抛出，回退即可。
+        return subprocess.Popen(argv, close_fds=True, creationflags=base,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
 
 
 def _short_error(exc):

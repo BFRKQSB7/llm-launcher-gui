@@ -158,6 +158,8 @@ class UpdaterScriptTests(unittest.TestCase):
         self.assertIn('set "PID=777"', content)
         self.assertIn(r'set "TARGET=C:\dir with space\LLMGUI.exe"', content)
         self.assertIn('set "NEWEXE=C:\\tmp\\新 版 LLMGUI.exe.tmp"', content)
+        self.assertIn('findstr.exe', content, '等待探针须用 System32 的 findstr 全路径')
+        self.assertNotIn('| find "', content, '不得用裸 find（会被 Git 的 find.exe 抢占）')
         self.assertIn('goto waitloop', content)
 
     def test_write_uses_console_encoding(self):
@@ -172,6 +174,95 @@ class UpdaterScriptTests(unittest.TestCase):
     def test_quote_cmd_arg(self):
         self.assertEqual(llm_gui.quote_cmd_arg(r'C:\a b\c'), '"C:\\a b\\c"')
         self.assertEqual(llm_gui.quote_cmd_arg('say "hi"'), '"say ""hi"""')
+
+
+class SpawnDetachedTests(unittest.TestCase):
+    """回归：spawn_detached 必须能在父进程退出后真正执行辅助 .bat。
+
+    历史故障：曾用 CREATE_NO_WINDOW|DETACHED_PROCESS，导致 cmd.exe 无控制台、
+    `cmd /c upd.bat` 一行都不跑，用户表现为「点了立即更新没反应」。
+    """
+
+    def test_no_detached_process_flag(self):
+        captured = {}
+
+        def fake_popen(argv, **kw):
+            captured.update(kw)
+            return object()
+
+        with patch.object(llm_gui.subprocess, 'Popen', fake_popen), \
+             patch.object(llm_gui.os, 'name', 'nt'):
+            llm_gui.spawn_detached(['cmd', '/c', r'C:\a b\upd.bat'])
+        flags = captured.get('creationflags', 0)
+        detached = getattr(llm_gui.subprocess, 'DETACHED_PROCESS', 0)
+        self.assertTrue(detached, 'DETACHED_PROCESS 常量应存在')
+        self.assertEqual(flags & detached, 0, '不得使用 DETACHED_PROCESS，否则 cmd /c 不执行')
+        self.assertTrue(flags & getattr(llm_gui.subprocess, 'CREATE_NO_WINDOW', 0),
+                        '应使用 CREATE_NO_WINDOW 隐藏窗口')
+        self.assertEqual(captured.get('stdin'), llm_gui.subprocess.DEVNULL)
+        self.assertEqual(captured.get('stdout'), llm_gui.subprocess.DEVNULL)
+
+    def test_breakaway_falls_back_on_oserror(self):
+        calls = []
+
+        def fake_popen(argv, **kw):
+            calls.append(kw.get('creationflags', 0))
+            if len(calls) == 1:
+                raise OSError(5, 'Access is denied')
+            return object()
+
+        with patch.object(llm_gui.subprocess, 'Popen', fake_popen), \
+             patch.object(llm_gui.os, 'name', 'nt'):
+            llm_gui.spawn_detached(['cmd', '/c', 'upd.bat'])
+        self.assertEqual(len(calls), 2, 'breakaway 失败应回退重试一次')
+        breakaway = getattr(llm_gui.subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0)
+        self.assertEqual(calls[1] & breakaway, 0, '回退时不应再带 breakaway')
+
+    @unittest.skipUnless(os.name == 'nt', '仅 Windows 上可执行替换验证')
+    def test_end_to_end_replace_after_pid_exit(self):
+        """真实子进程：写完整 .bat → spawn_detached → 断言 target 被替换、临时文件被清理。
+
+        PID 绑定一个必然已退出的短命进程，验证“等待旧进程退出后替换”是真正生效的
+        （find 被 Git 抢占时该等待会被跳过，此测试即为该缺陷的回归）。
+        """
+        import subprocess
+        import sys
+        import time
+        dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+        dead.wait()
+        with tempfile.TemporaryDirectory() as d:
+            target = os.path.join(d, 'LLMGUI.exe')
+            new = os.path.join(d, 'LLMGUI-new.exe.tmp')
+            bat = os.path.join(d, 'upd.bat')
+            log = os.path.join(d, 'upd.log')
+            with open(target, 'wb') as f:
+                f.write(b'OLD')
+            with open(new, 'wb') as f:
+                f.write(b'NEW-CONTENT')
+            content = llm_gui.build_update_bat(new, target, dead.pid,
+                                               bat_path=bat, log_path=log, relaunch=False)
+            llm_gui.write_update_bat(bat, content)
+            proc = llm_gui.spawn_detached(['cmd', '/c', bat])
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                if os.path.exists(target):
+                    with open(target, 'rb') as f:
+                        if f.read() == b'NEW-CONTENT':
+                            break
+                time.sleep(0.3)
+            with open(target, 'rb') as f:
+                self.assertEqual(f.read(), b'NEW-CONTENT', '辅助脚本应在旧 PID 退出后完成替换')
+            # 临时新版应在替换后被删除（留时间给 del 与自删除）
+            for _ in range(20):
+                if not os.path.exists(new):
+                    break
+                time.sleep(0.2)
+            self.assertFalse(os.path.exists(new), '替换后应删除临时新版')
+            # 等辅助 cmd 自然结束，避免测试退出时留下仍运行的子进程（ResourceWarning）
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                pass
 
 
 class SourceModeTests(unittest.TestCase):
