@@ -129,7 +129,7 @@ GEMMA_JINJA_TEMPLATE = """{{ bos_token }}{% for message in messages %}{% if mess
 {% endif %}
 """
 
-VERSION = '1.12.1'
+VERSION = '1.12.2'
 GITHUB_USER = 'BFRKQSB7'
 GITHUB_REPO = 'llm-launcher-gui'
 UPDATE_API_URL = f'https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest'
@@ -932,8 +932,11 @@ class App(ctk.CTk):
         later_btn.pack(side='left', padx=6)
         ctk.CTkLabel(dlg, text='本次运行最多提示一次；可在「设置」手动检查或关闭自动检查。',
                      text_color=UI['muted'], font=('Microsoft YaHei', 11)).pack(pady=(0, 10))
-        state = {'run': False}
-        self._update_ui = {'btn': update_btn, 'later': later_btn, 'status': status, 'prog': prog}
+        # state 与 _update_ui 必须是同一个字典：_confirm_replace.go / _start_update_download /
+        # _update_failed 都从 state 取 btn/later/status/prog；少了这些键会在 Tk 回调里
+        # KeyError 被静默吞掉，表现为「点了开始更新没反应」。
+        state = {'run': False, 'btn': update_btn, 'later': later_btn, 'status': status, 'prog': prog}
+        self._update_ui = state
 
         def on_update():
             if state['run']:

@@ -1,4 +1,4 @@
-# LLM GUI v1.12.1
+# LLM GUI v1.12.2
 
 **English** | [**简体中文**](./README.zh-CN.md)
 
@@ -89,6 +89,10 @@ pyinstaller --onefile --windowed --name LLMGUI --icon=app.ico --collect-all cust
 
 ## Version
 
+- v1.12.2 (2026-10-15): fix the in-app "Update now" button doing nothing.
+  - Fix: clicking "Start update" in the confirmation dialog closed it but never started the download (an internal state dict was missing the button/status/progress handles, so the callback raised a `KeyError` that Tk swallowed). The whole chain — confirm → download with progress → SHA-256 verify → helper script → exit & replace → relaunch — now runs; after a failure the button becomes "Retry" and works again
+  - Test: new regression tests drive the real dialog code path (fail on the old code)
+  - Note: v1.12.0 / v1.12.1 cannot self-update through this bug — download `LLMGUI.exe` from the Release page once; later versions update in place
 - v1.12.1 (2026-10-15): fix the Settings dialog overflowing and being placed off-screen.
   - Fix: the Settings page is now scrollable and its height is capped to the usable screen height, so on high-DPI / large-scale displays (e.g. 2K at 150%) the bottom buttons ("Save" / "Check for updates") are no longer cut off below the screen edge
   - Fix: dialogs are now positioned using consistent physical units (client area × scaling + window chrome) and clamped inside the work area, so they no longer open partly off-screen or need to be dragged up by hand

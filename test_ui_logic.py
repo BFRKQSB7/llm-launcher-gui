@@ -200,3 +200,95 @@ class DialogGeometryTests(unittest.TestCase):
         app = self.app(chrome=(11, 45, 22, 45))
         dx, dy, cw, ch = app._window_chrome(None)
         self.assertTrue(all(v >= 0 for v in (dx, dy, cw, ch)))
+
+
+class UpdateButtonFlowTests(unittest.TestCase):
+    """「立即更新 → 开始更新」整条链必须真能跑起来。
+
+    回归：state 字典曾缺少 btn/later/status/prog，go() 在 Tk 回调里 KeyError 被静默吞掉，
+    表现为点了「开始更新」确认框关闭但什么都不发生。
+    """
+
+    class _Btn:
+        def __init__(self, *args, **kw):
+            self.opts = dict(kw)
+
+        def configure(self, **kw):
+            self.opts.update(kw)
+
+        def cget(self, key):
+            return self.opts.get(key, 'normal' if key == 'state' else None)
+
+        def pack(self, *a, **kw):
+            return None
+
+        def winfo_exists(self):
+            return True
+
+        def invoke(self):
+            return self.opts['command']()
+
+    def _run(self, download):
+        import os
+        import sys
+        import tempfile
+        from unittest.mock import MagicMock
+
+        fake_ctk = MagicMock()
+        buttons = {}
+
+        def make_button(*args, **kw):
+            b = self._Btn(*args, **kw)
+            buttons[kw.get('text')] = b
+            return b
+
+        fake_ctk.CTkButton = make_button
+        app = object.__new__(llm_gui.App)
+        app._q = queue.Queue()
+        app._update_dlg = None          # 未初始化的 Tk 对象读缺失属性会无限递归
+        app.logs = []
+        app.append_log = app.logs.append
+        app._apply_icon = lambda w: None
+        app._center_on_main = lambda w: None
+        asked = []
+        app._confirm_dlg = lambda title, msg, on_yes, **kw: (asked.append(title), on_yes())
+        info = {'version': '9.9.9', 'body': 'x', 'asset_url': 'https://example.invalid/LLMGUI.exe',
+                'size': 3, 'digest': None, 'html_url': 'https://example.invalid'}
+        with tempfile.TemporaryDirectory() as tmp:
+            app._update_target_path = lambda: os.path.join(tmp, 'LLMGUI.exe')
+            with patch.object(llm_gui, 'ctk', fake_ctk), \
+                    patch.object(sys, 'frozen', True, create=True), \
+                    patch.object(llm_gui, 'download_asset', download):
+                app._show_update_dialog(info)
+                buttons['立即更新'].invoke()      # 内部 go() 若缺键会在这里直接抛 KeyError
+                msg = None
+                try:
+                    kind, *rest = app._q.get(timeout=5)
+                    while kind != 'update_error':
+                        kind, *rest = app._q.get(timeout=5)
+                    msg = rest[0]
+                except queue.Empty:
+                    pass
+        return app, buttons, asked, msg
+
+    def test_confirm_starts_download_without_keyerror(self):
+        def boom(*a, **kw):
+            raise OSError('offline')
+        app, buttons, asked, msg = self._run(boom)
+        self.assertEqual(asked, ['确认更新'])
+        self.assertIsNotNone(msg, '下载线程应已启动并上报 update_error')
+
+    def test_failure_restores_retry_button_and_run_flag(self):
+        def boom(*a, **kw):
+            raise OSError('offline')
+        app, buttons, asked, msg = self._run(boom)
+        app._update_failed(app._update_ui, msg)
+        self.assertEqual(buttons['立即更新'].cget('text'), '重试')
+        self.assertEqual(buttons['立即更新'].cget('state'), 'normal')
+        self.assertFalse(app._update_ui['run'], '失败后必须允许再次点击重试')
+        self.assertTrue(any('更新失败' in line for line in app.logs))
+
+    def test_update_ui_and_dialog_state_are_the_same_dict(self):
+        app, buttons, asked, msg = self._run(lambda *a, **kw: (_ for _ in ()).throw(OSError('x')))
+        for key in ('run', 'btn', 'later', 'status', 'prog'):
+            self.assertIn(key, app._update_ui)
